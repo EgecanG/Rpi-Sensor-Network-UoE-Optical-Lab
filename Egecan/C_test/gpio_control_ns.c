@@ -62,7 +62,7 @@ void delay_ns(unsigned int ns) {
     } while (1);
 }
 
-void generate_frequency(unsigned int delay_ns)
+void generate_frequency(unsigned int delay)
 {
     // Get direct pointers to the SET and CLEAR registers
     volatile unsigned *gpio_set = gpio + 7;    // GPSET0
@@ -71,20 +71,20 @@ void generate_frequency(unsigned int delay_ns)
     // Pre-calculate the bit mask for GPIO 17
     unsigned int bit = 1 << 17;
 
-    float freq = 1000000000.0f / (delay_ns * 2); // Calculate frequency in Hz
+    float freq = 1000000000.0f / (delay * 2); // Calculate frequency in Hz
     printf("Attempting to generate %.2f Hz signal\n", freq);
-    printf("Delay time: %u nanoseconds\n", delay_ns);
+    printf("Delay time: %u nanoseconds\n", delay);
     printf("Press Ctrl+C to stop.\n");
 
     // Main loop
     while(1) {
         // Set GPIO 17 high
         *gpio_set = bit;
-        delay_ns(delay_ns);
+        delay_ns(delay);
         
         // Set GPIO 17 low
         *gpio_clr = bit;
-        delay_ns(delay_ns);
+        delay_ns(delay);
     }
 }
 
