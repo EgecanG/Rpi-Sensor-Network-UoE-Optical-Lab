@@ -1,3 +1,4 @@
+#define _GNU_SOURCE         /* Required for CPU_ZERO and CPU_SET */
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -7,6 +8,8 @@
 #include <time.h>
 #include <string.h>
 #include <sched.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 
 #define BCM2711_PERI_BASE 0xFE000000
 #define GPIO_BASE (BCM2711_PERI_BASE + 0x200000)
@@ -38,7 +41,13 @@ uint64_t get_cpu_freq(void) {
     return freq;
 }
 
-void set_realtime_priority(void) {
+void set_process_priority(void) {
+    // Set maximum priority
+    if (setpriority(PRIO_PROCESS, 0, -20) != 0) {
+        perror("Failed to set process priority");
+    }
+
+    // Set real-time FIFO scheduler
     struct sched_param sp = { .sched_priority = sched_get_priority_max(SCHED_FIFO) };
     if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
         perror("Failed to set real-time priority");
@@ -132,20 +141,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Set real-time priority
-    set_realtime_priority();
+    // Set process priority
+    set_process_priority();
 
     // Lock program into RAM to prevent page faults
     if (mlockall(MCL_CURRENT|MCL_FUTURE) != 0) {
         perror("mlockall failed");
-    }
-
-    // Set CPU affinity to core 0
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET(0, &set);
-    if (sched_setaffinity(0, sizeof(set), &set) != 0) {
-        perror("sched_setaffinity failed");
     }
 
     // Set up GPIO
