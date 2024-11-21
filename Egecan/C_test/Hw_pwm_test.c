@@ -8,24 +8,13 @@
 #include <time.h>
 
 #define BCM2711_PERI_BASE 0xFE000000
-#define PWM_BASE (BCM2711_PERI_BASE + 0x20C000)
-#define CLOCK_BASE (BCM2711_PERI_BASE + 0x101000)
 #define GPIO_BASE (BCM2711_PERI_BASE + 0x200000)
-
-#define PWM_CTL  0
-#define PWM_RNG1 4
-#define PWM_DAT1 5
-
-#define PWMCLK_CNTL 40
-#define PWMCLK_DIV  41
-
 #define BLOCK_SIZE 4096
 
+// GPIO setup macros
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
-#define SET_GPIO_ALT(g,a) *(gpio+(((g)/10))) |= (((a)<=3?(a)+4:(a)==4?3:2)<<(((g)%10)*3))
+#define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
-volatile unsigned *pwm;
-volatile unsigned *clk;
 volatile unsigned *gpio;
 
 // Nanosecond delay function
@@ -40,133 +29,104 @@ static inline void delay_ns(unsigned int ns) {
 void setup_io()
 {
     int mem_fd;
-    void *gpio_map, *pwm_map, *clk_map;
+    void *gpio_map;
 
     if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC)) < 0) {
         printf("Failed to open /dev/mem\n");
         exit(-1);
     }
 
-    gpio_map = mmap(NULL, BLOCK_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, GPIO_BASE);
-    pwm_map = mmap(NULL, BLOCK_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, PWM_BASE);
-    clk_map = mmap(NULL, BLOCK_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, CLOCK_BASE);
+    gpio_map = mmap(
+        NULL,
+        BLOCK_SIZE,
+        PROT_READ|PROT_WRITE,
+        MAP_SHARED,
+        mem_fd,
+        GPIO_BASE
+    );
 
     close(mem_fd);
 
-    if (gpio_map == MAP_FAILED || pwm_map == MAP_FAILED || clk_map == MAP_FAILED) {
+    if (gpio_map == MAP_FAILED) {
         printf("mmap error\n");
         exit(-1);
     }
 
     gpio = (volatile unsigned *)gpio_map;
-    pwm = (volatile unsigned *)pwm_map;
-    clk = (volatile unsigned *)clk_map;
 }
 
-void setup_pwm(int carrier_freq)
+void send_bit(int bit)
 {
-    // Stop PWM
-    *(pwm + PWM_CTL) = 0;
-
-    // Stop PWM clock
-    *(clk + PWMCLK_CNTL) = 0x5A000000 | (1 << 5);
-    usleep(10);
-
-    // Calculate parameters for carrier frequency
-    int range = 8;  // Smaller range for higher frequencies
-    int divisor = 500000000 / (carrier_freq * range);
-    
-    printf("PWM Carrier Configuration:\n");
-    printf("Carrier Frequency: %d Hz\n", carrier_freq);
-    printf("Range: %d\n", range);
-    printf("Divisor: %d\n", divisor);
-    printf("Actual Frequency: %d Hz\n", 500000000 / (range * divisor));
-    
-    *(clk + PWMCLK_DIV) = 0x5A000000 | (divisor << 12);
-    *(clk + PWMCLK_CNTL) = 0x5A000011;
-    usleep(10);
-
-    *(pwm + PWM_RNG1) = range;
-    *(pwm + PWM_DAT1) = range/2;  // 50% duty cycle
-}
-
-void pwm_output(int on)
-{
-    if (on) {
-        *(pwm + PWM_CTL) = 0x81;  // Enable PWM
+    if (bit) {
+        *(gpio + 7) = 1 << 17;  // Set GPIO 17 high (GPSET0)
     } else {
-        *(pwm + PWM_CTL) = 0;     // Disable PWM
+        *(gpio + 10) = 1 << 17; // Set GPIO 17 low (GPCLR0)
     }
+    delay_ns(1000);  // 1µs delay for 1Mbps
 }
 
-void send_byte_ook(unsigned char byte)
+void send_byte(unsigned char byte)
 {
     // Send start bit (1)
-    pwm_output(1);
-    delay_ns(1000);  // 1µs per bit for 1Mbps
+    send_bit(1);
     
-    // Send 8 data bits
-    for (int i = 0; i < 8; i++) {
-        int bit = (byte >> (7-i)) & 0x01;
-        pwm_output(bit);
-        delay_ns(1000);  // 1µs delay
+    // Send 8 data bits, MSB first
+    for (int i = 7; i >= 0; i--) {
+        send_bit((byte >> i) & 0x01);
     }
     
     // Send stop bit (1)
-    pwm_output(1);
-    delay_ns(1000);
+    send_bit(1);
     
-    // Turn off carrier and add small gap
-    pwm_output(0);
-    delay_ns(1000);
+    // Small gap between bytes
+    send_bit(0);
 }
 
-// Function to send a test pattern
-void send_test_pattern(void)
+void send_test_pattern()
 {
-    // Alternating 1s and 0s
-    printf("Sending alternating pattern...\n");
-    unsigned char alt_pattern = 0x55;  // 01010101
+    // 1. Alternating 1s and 0s
+    printf("Sending alternating pattern (0x55)...\n");
     for(int i = 0; i < 100; i++) {
-        send_byte_ook(alt_pattern);
+        send_byte(0x55);  // 01010101
     }
     
-    // All ones
-    printf("Sending all ones...\n");
+    // 2. All ones
+    printf("Sending all ones (0xFF)...\n");
     for(int i = 0; i < 100; i++) {
-        send_byte_ook(0xFF);
+        send_byte(0xFF);  // 11111111
     }
     
-    // All zeros
-    printf("Sending all zeros...\n");
+    // 3. All zeros
+    printf("Sending all zeros (0x00)...\n");
     for(int i = 0; i < 100; i++) {
-        send_byte_ook(0x00);
+        send_byte(0x00);  // 00000000
+    }
+
+    // 4. Counter pattern
+    printf("Sending counter pattern...\n");
+    for(int i = 0; i < 256; i++) {
+        send_byte((unsigned char)i);
     }
 }
 
 int main(int argc, char **argv)
 {
-    // Set up memory regions
+    // Set up GPIO
     setup_io();
 
-    // Configure GPIO 18 for PWM
-    INP_GPIO(18);
-    SET_GPIO_ALT(18, 5);
+    // Configure GPIO 17 as output
+    INP_GPIO(17);
+    OUT_GPIO(17);
 
-    // Set up carrier frequency (10MHz for good sampling of 1Mbps data)
-    int carrier_freq = 10000000;  // 10MHz carrier
-    setup_pwm(carrier_freq);
-
-    printf("1Mbps OOK Transmitter\n");
-    printf("Carrier Frequency: %d Hz\n", carrier_freq);
+    printf("1Mbps Baseband OOK Transmitter\n");
+    printf("Using GPIO 17 (Pin 11)\n");
     printf("Data Rate: 1 Mbps\n");
+    printf("Format: Start(1) + 8 Data + Stop(1) + Gap(0)\n");
 
+    // Main loop
     while(1) {
-        // Send test pattern continuously
         send_test_pattern();
-        
-        // Small gap between patterns
-        usleep(1000);
+        usleep(1000);  // 1ms gap between patterns
     }
 
     return 0;
