@@ -55,7 +55,8 @@ void setup_io()
     gpio = (volatile unsigned *)gpio_map;
 }
 
-void send_bit(int bit)
+// Function to output a single bit (1 = high, 0 = low)
+void output_bit(int bit)
 {
     if (bit) {
         *(gpio + 7) = 1 << 17;  // Set GPIO 17 high (GPSET0)
@@ -65,21 +66,13 @@ void send_bit(int bit)
     delay_ns(1000);  // 1µs delay for 1Mbps
 }
 
+// Function to send a byte directly as bits
 void send_byte(unsigned char byte)
 {
-    // Send start bit (1)
-    send_bit(1);
-    
-    // Send 8 data bits, MSB first
+    // Send each bit MSB first
     for (int i = 7; i >= 0; i--) {
-        send_bit((byte >> i) & 0x01);
+        output_bit((byte >> i) & 0x01);
     }
-    
-    // Send stop bit (1)
-    send_bit(1);
-    
-    // Small gap between bytes
-    send_bit(0);
 }
 
 void send_test_pattern()
@@ -102,10 +95,10 @@ void send_test_pattern()
         send_byte(0x00);  // 00000000
     }
 
-    // 4. Counter pattern
-    printf("Sending counter pattern...\n");
-    for(int i = 0; i < 256; i++) {
-        send_byte((unsigned char)i);
+    // 4. Single bit pattern (one 1 followed by seven 0s)
+    printf("Sending single bit pattern (0x80)...\n");
+    for(int i = 0; i < 100; i++) {
+        send_byte(0x80);  // 10000000
     }
 }
 
@@ -118,15 +111,15 @@ int main(int argc, char **argv)
     INP_GPIO(17);
     OUT_GPIO(17);
 
-    printf("1Mbps Baseband OOK Transmitter\n");
+    printf("1Mbps Direct OOK Transmitter\n");
     printf("Using GPIO 17 (Pin 11)\n");
     printf("Data Rate: 1 Mbps\n");
-    printf("Format: Start(1) + 8 Data + Stop(1) + Gap(0)\n");
+    printf("Format: Direct bit output (1=high, 0=low)\n");
 
     // Main loop
     while(1) {
         send_test_pattern();
-        usleep(1000);  // 1ms gap between patterns
+        usleep(10000);  // 10ms gap between patterns
     }
 
     return 0;
