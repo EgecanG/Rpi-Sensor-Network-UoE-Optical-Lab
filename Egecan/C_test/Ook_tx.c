@@ -15,17 +15,14 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
+// Timing constants
+#define BIT_DURATION_NS 1000    // 1000ns = 1μs = 1Mbps
+#define MESSAGE_INTERVAL_MS 10   // 10ms between messages
+
 volatile unsigned *gpio;
 volatile unsigned *gpio_set;
 volatile unsigned *gpio_clr;
 unsigned int gpio_bit;
-
-// Function prototypes
-void setup_io(void);
-void delay_ns(unsigned int ns);
-void transmit_bit(int bit, unsigned int bit_duration_ns);
-void transmit_byte(uint8_t byte, unsigned int bit_duration_ns);
-void transmit_data(const uint8_t *data, size_t length, unsigned int bit_duration_ns);
 
 void setup_io()
 {
@@ -55,7 +52,6 @@ void setup_io()
 
     gpio = (volatile unsigned *)gpio_map;
     
-    // Initialize global pointers to SET and CLEAR registers
     gpio_set = gpio + 7;    // GPSET0
     gpio_clr = gpio + 10;   // GPCLR0
     gpio_bit = 1 << 17;     // GPIO 17
@@ -74,31 +70,47 @@ void delay_ns(unsigned int ns) {
     } while (1);
 }
 
-// Transmit a single bit
-void transmit_bit(int bit, unsigned int bit_duration_ns) {
+void delay_ms(unsigned int ms) {
+    struct timespec ts = {
+        .tv_sec = ms / 1000,
+        .tv_nsec = (ms % 1000) * 1000000
+    };
+    nanosleep(&ts, NULL);
+}
+
+void transmit_bit(int bit) {
     if (bit) {
         *gpio_set = gpio_bit;  // Set high for 1
     } else {
         *gpio_clr = gpio_bit;  // Set low for 0
     }
-    delay_ns(bit_duration_ns);
+    delay_ns(BIT_DURATION_NS);
 }
 
-// Transmit a byte, LSB first
-void transmit_byte(uint8_t byte, unsigned int bit_duration_ns) {
+void transmit_byte(uint8_t byte) {
     for (int i = 0; i < 8; i++) {
-        transmit_bit((byte >> i) & 0x01, bit_duration_ns);
+        transmit_bit((byte >> i) & 0x01);
     }
 }
 
-// Transmit arbitrary data
-void transmit_data(const uint8_t *data, size_t length, unsigned int bit_duration_ns) {
-    printf("Transmitting %zu bytes at %u ns per bit\n", length, bit_duration_ns);
-    printf("Data rate: %.2f kbps\n", 1000000.0f / bit_duration_ns);
-    
-    for (size_t i = 0; i < length; i++) {
-        transmit_byte(data[i], bit_duration_ns);
+void transmit_message(const uint8_t *data, size_t length) {
+    // Transmit preamble (8 ones)
+    for (int i = 0; i < 8; i++) {
+        transmit_bit(1);
     }
+    
+    // Transmit data
+    for (size_t i = 0; i < length; i++) {
+        transmit_byte(data[i]);
+    }
+    
+    // Transmit postamble (8 zeros)
+    for (int i = 0; i < 8; i++) {
+        transmit_bit(0);
+    }
+    
+    // Ensure GPIO is low after transmission
+    *gpio_clr = gpio_bit;
 }
 
 int main(int argc, char **argv) {
@@ -114,24 +126,27 @@ int main(int argc, char **argv) {
     INP_GPIO(17);
     OUT_GPIO(17);
 
-    // Convert the message to bytes
     const char *message = argv[1];
     size_t message_length = strlen(message);
     
-    // Example: 100 microseconds per bit (10 kbps)
-    unsigned int bit_duration_ns = 1000;  
+    printf("Transmitting message: \"%s\"\n", message);
+    printf("Message length: %zu bytes\n", message_length);
+    printf("Data rate: 1 Mbps (1μs per bit)\n");
+    printf("Message interval: %d ms\n", MESSAGE_INTERVAL_MS);
+    printf("Press Ctrl+C to stop.\n\n");
     
-    // Transmit start sequence (optional)
-    for (int i = 0; i < 8; i++) {
-        transmit_bit(1, bit_duration_ns);  // Preamble of 8 ones
-    }
+    unsigned long message_count = 0;
     
-    // Transmit the actual message
-    transmit_data((const uint8_t *)message, message_length, bit_duration_ns);
-    
-    // Transmit stop sequence (optional)
-    for (int i = 0; i < 8; i++) {
-        transmit_bit(0, bit_duration_ns);  // Postamble of 8 zeros
+    while(1) {
+        message_count++;
+        printf("\rMessages sent: %lu", message_count);
+        fflush(stdout);
+        
+        // Transmit the message
+        transmit_message((const uint8_t *)message, message_length);
+        
+        // Wait for the specified interval
+        delay_ms(MESSAGE_INTERVAL_MS);
     }
 
     return 0;
