@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
     size_t message_length = strlen(message);
     
     // Example: 100 microseconds per bit (10 kbps)
-    unsigned int bit_duration_ns = 100000;  
+    unsigned int bit_duration_ns = 1000;  
     
     // Transmit start sequence (optional)
     for (int i = 0; i < 8; i++) {
