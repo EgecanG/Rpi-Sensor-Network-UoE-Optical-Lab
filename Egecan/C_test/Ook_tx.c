@@ -15,9 +15,7 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
-// Timing constants
 #define BIT_DURATION_NS 1000    // 1000ns = 1μs = 1Mbps
-#define MESSAGE_INTERVAL_MS 10   // 10ms between messages
 
 volatile unsigned *gpio;
 volatile unsigned *gpio_set;
@@ -70,15 +68,7 @@ void delay_ns(unsigned int ns) {
     } while (1);
 }
 
-void delay_ms(unsigned int ms) {
-    struct timespec ts = {
-        .tv_sec = ms / 1000,
-        .tv_nsec = (ms % 1000) * 1000000
-    };
-    nanosleep(&ts, NULL);
-}
-
-void transmit_bit(int bit) {
+inline void transmit_bit(int bit) {
     if (bit) {
         *gpio_set = gpio_bit;  // Set high for 1
     } else {
@@ -87,7 +77,8 @@ void transmit_bit(int bit) {
     delay_ns(BIT_DURATION_NS);
 }
 
-void transmit_byte(uint8_t byte) {
+inline void transmit_byte(uint8_t byte) {
+    // Transmit LSB first
     for (int i = 0; i < 8; i++) {
         transmit_bit((byte >> i) & 0x01);
     }
@@ -108,9 +99,6 @@ void transmit_message(const uint8_t *data, size_t length) {
     for (int i = 0; i < 8; i++) {
         transmit_bit(0);
     }
-    
-    // Ensure GPIO is low after transmission
-    *gpio_clr = gpio_bit;
 }
 
 int main(int argc, char **argv) {
@@ -129,24 +117,15 @@ int main(int argc, char **argv) {
     const char *message = argv[1];
     size_t message_length = strlen(message);
     
-    printf("Transmitting message: \"%s\"\n", message);
+    printf("Starting continuous transmission:\n");
+    printf("Message: \"%s\"\n", message);
     printf("Message length: %zu bytes\n", message_length);
     printf("Data rate: 1 Mbps (1μs per bit)\n");
-    printf("Message interval: %d ms\n", MESSAGE_INTERVAL_MS);
     printf("Press Ctrl+C to stop.\n\n");
     
-    unsigned long message_count = 0;
-    
+    // Continuous transmission loop
     while(1) {
-        message_count++;
-        printf("\rMessages sent: %lu", message_count);
-        fflush(stdout);
-        
-        // Transmit the message
         transmit_message((const uint8_t *)message, message_length);
-        
-        // Wait for the specified interval
-        delay_ms(MESSAGE_INTERVAL_MS);
     }
 
     return 0;
