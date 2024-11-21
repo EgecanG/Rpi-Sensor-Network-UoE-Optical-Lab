@@ -16,19 +16,8 @@
 
 volatile unsigned *gpio;
 
-// Function for nanosecond delay using busy wait
-static inline void delay_ns(unsigned int ns) {
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    
-    do {
-        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
-        uint64_t delta_ns = (end.tv_sec - start.tv_sec) * 1000000000 + 
-                           (end.tv_nsec - start.tv_nsec);
-        if (delta_ns >= ns)
-            break;
-    } while (1);
-}
+// Function prototype for delay_ns
+void delay_ns(unsigned int ns);
 
 void setup_io()
 {
@@ -57,6 +46,20 @@ void setup_io()
     }
 
     gpio = (volatile unsigned *)gpio_map;
+}
+
+// Implementation of delay_ns function
+void delay_ns(unsigned int ns) {
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    
+    do {
+        clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+        uint64_t delta_ns = (end.tv_sec - start.tv_sec) * 1000000000ULL + 
+                           (end.tv_nsec - start.tv_nsec);
+        if (delta_ns >= ns)
+            break;
+    } while (1);
 }
 
 void generate_frequency(unsigned int delay_ns)
