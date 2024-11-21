@@ -65,6 +65,9 @@ int main(int argc, char **argv)
     while(1) {
         // Set GPIO 17 high
         *gpio_set = bit;
+        *gpio_set = bit;
+        *gpio_set = bit;
+        *gpio_set = bit;
         
         // Set GPIO 17 low
         *gpio_clr = bit;
