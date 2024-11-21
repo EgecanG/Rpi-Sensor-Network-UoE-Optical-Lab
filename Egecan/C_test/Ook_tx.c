@@ -15,7 +15,7 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
-#define BIT_DURATION_NS 1000    // 1000ns = 1μs = 1Mbps
+#define BIT_DURATION_NS 250    // 1000ns = 1μs = 1Mbps
 
 volatile unsigned *gpio;
 volatile unsigned *gpio_set;
