@@ -71,6 +71,9 @@ int main(int argc, char **argv)
         
         // Set GPIO 17 low
         *gpio_clr = bit;
+        *gpio_clr = bit;
+        *gpio_clr = bit;
+        *gpio_clr = bit;
     }
 
     return 0;
