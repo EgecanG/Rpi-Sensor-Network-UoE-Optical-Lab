@@ -15,12 +15,12 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
-#define BIT_DURATION_NS 250    // 1000ns = 1μs = 1Mbps
+#define BIT_DURATION_NS 1000    // 1000ns = 1μs = 1Mbps
 
 volatile unsigned *gpio;
-volatile unsigned *gpio_set;
-volatile unsigned *gpio_clr;
-unsigned int gpio_bit;
+volatile unsigned *gpio_set;    // GPSET0
+volatile unsigned *gpio_clr;    // GPCLR0
+unsigned int gpio_bit;          // Pre-calculated bit mask for GPIO 17
 
 void setup_io()
 {
@@ -69,11 +69,9 @@ void delay_ns(unsigned int ns) {
 }
 
 inline void transmit_bit(int bit) {
-    if (bit) {
-        *gpio_set = gpio_bit;  // Set high for 1
-    } else {
-        *gpio_clr = gpio_bit;  // Set low for 0
-    }
+    // Use bit to select between SET and CLR registers
+    // This eliminates the branch and is more efficient
+    *(gpio_set + (bit ^ 1) * 3) = gpio_bit;
     delay_ns(BIT_DURATION_NS);
 }
 
