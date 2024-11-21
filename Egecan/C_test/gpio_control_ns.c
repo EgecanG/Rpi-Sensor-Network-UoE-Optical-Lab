@@ -98,7 +98,7 @@ int main(int argc, char **argv)
     OUT_GPIO(17);
 
     // Example: for 5MHz (200ns period, so 100ns delay)
-    generate_frequency(100);  // 100ns delay for each half-cycle
+    generate_frequency(25);  // 100ns delay for each half-cycle
 
     return 0;
 }
