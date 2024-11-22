@@ -82,7 +82,7 @@ void setup_io(void) {
     gpio = (volatile unsigned *)gpio_map;
     gpio_set = gpio + 7;
     gpio_clr = gpio + 10;
-    gpio_bit = 1 << 17;
+    gpio_bit = 1 << 4;
 
     // Calculate cycles needed for bit duration
     uint64_t cpu_freq = get_cpu_freq();
@@ -153,8 +153,8 @@ int main(int argc, char **argv) {
     setup_io();
 
     // Configure GPIO 17 as output
-    INP_GPIO(17);
-    OUT_GPIO(17);
+    INP_GPIO(4);
+    OUT_GPIO(4);
 
     const char *message = argv[1];
     size_t message_length = strlen(message);
