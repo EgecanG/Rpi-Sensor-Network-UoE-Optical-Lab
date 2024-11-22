@@ -20,13 +20,9 @@
 #define GPIO_GET(g) (*(gpio+13)&(1<<g))
 
 #define BIT_DURATION_NS 250
-#define SAMPLE_OFFSET_NS 125    // Sample in middle of bit
+#define SAMPLE_OFFSET_NS 125
 #define BUFFER_SIZE 1024
-#define GPIO_PIN 4              // Using GPIO 4
-
-// Debug flags
-#define DEBUG_BITS 1            // Print received bits
-#define DEBUG_TIMING 1          // Print timing information
+#define GPIO_PIN 4
 
 #define STATE_LOOKING_FOR_PREAMBLE 0
 #define STATE_CHECKING_START 1
@@ -70,83 +66,123 @@ void setup_io(void) {
     uint64_t cpu_freq = get_cpu_freq();
     cycles_per_bit = (cpu_freq * BIT_DURATION_NS) / 1000000000ULL;
     cycles_per_sample_offset = (cpu_freq * SAMPLE_OFFSET_NS) / 1000000000ULL;
-    
-    printf("CPU Frequency: %lu Hz\n", cpu_freq);
-    printf("Cycles per bit: %u\n", cycles_per_bit);
-    printf("Sample offset cycles: %u\n", cycles_per_sample_offset);
 }
 
-// Enhanced bit reading with averaging
-inline int read_bit(uint64_t *next_sample_cycle) {
-    int samples = 0;
-    int high_samples = 0;
-    const int NUM_SAMPLES = 3;  // Take multiple samples per bit
+// Wait for a signal transition
+int wait_for_edge(int current_level) {
+    int count = 0;
+    const int timeout = 1000000;  // Timeout counter
     
-    for(int i = 0; i < NUM_SAMPLES; i++) {
-        while (get_cycles() < *next_sample_cycle + (i * cycles_per_bit/NUM_SAMPLES)) {
-            asm volatile("nop");
+    while (count < timeout) {
+        if (GPIO_GET(GPIO_PIN) != current_level) {
+            return 1;  // Edge detected
+        }
+        count++;
+        asm volatile("nop");
+    }
+    return 0;  // Timeout
+}
+
+// Find the start of a bit by looking for transitions
+uint64_t synchronize_bits(void) {
+    int transitions = 0;
+    uint64_t total_cycles = 0;
+    const int REQUIRED_TRANSITIONS = 4;  // Look for 4 clean transitions
+    
+    int current_level = GPIO_GET(GPIO_PIN);
+    printf("Initial level: %d\n", current_level);
+    
+    for (int i = 0; i < REQUIRED_TRANSITIONS; i++) {
+        uint64_t start = get_cycles();
+        
+        if (!wait_for_edge(current_level)) {
+            printf("Timeout waiting for edge %d\n", i);
+            return 0;
         }
         
-        if (GPIO_GET(GPIO_PIN)) {
-            high_samples++;
-        }
-        samples++;
+        uint64_t end = get_cycles();
+        total_cycles += (end - start);
+        current_level = !current_level;
+        transitions++;
+        
+        printf("Edge %d detected after %lu cycles\n", i, end - start);
     }
     
+    if (transitions == REQUIRED_TRANSITIONS) {
+        uint64_t avg_cycles = total_cycles / transitions;
+        printf("Average cycles between transitions: %lu\n", avg_cycles);
+        return avg_cycles;
+    }
+    
+    return 0;
+}
+
+inline int read_bit(uint64_t *next_sample_cycle) {
+    while (get_cycles() < *next_sample_cycle) {
+        asm volatile("nop");
+    }
+    
+    int bit = GPIO_GET(GPIO_PIN);
     *next_sample_cycle += cycles_per_bit;
-    int bit = (high_samples > (samples/2));  // Majority vote
-    
-    if (DEBUG_BITS) {
-        printf("%d", bit);
-        fflush(stdout);
-    }
     
     return bit;
 }
 
-// Enhanced preamble detection with error tolerance
+// Look for preamble pattern with timing synchronization
 int detect_preamble(uint64_t *next_sample_cycle) {
-    int pattern[8] = {1,0,1,0,1,0,1,0};  // Expected pattern
-    int matches = 0;
-    int errors = 0;
-    const int MAX_ERRORS = 1;  // Allow one error in pattern
+    uint64_t bit_time = synchronize_bits();
+    if (bit_time == 0) {
+        return 0;
+    }
     
-    printf("\nChecking preamble pattern: ");
+    // Adjust our bit timing based on measured transitions
+    cycles_per_bit = bit_time * 2;  // Two transitions per bit
+    *next_sample_cycle = get_cycles() + (cycles_per_bit / 2);  // Start sampling in middle of bit
+    
+    printf("Adjusted cycles per bit: %u\n", cycles_per_bit);
+    
+    // Read 8 bits and check if they match our pattern
+    int bits[8];
+    printf("Reading preamble bits: ");
     for (int i = 0; i < 8; i++) {
-        int bit = read_bit(next_sample_cycle);
-        if (bit == pattern[i]) {
-            matches++;
-        } else {
+        bits[i] = read_bit(next_sample_cycle);
+        printf("%d", bits[i]);
+    }
+    printf("\n");
+    
+    // Check for alternating pattern (allowing one error)
+    int errors = 0;
+    for (int i = 0; i < 8; i++) {
+        if (bits[i] != (i % 2)) {
             errors++;
         }
     }
-    printf(" (matches: %d, errors: %d)\n", matches, errors);
     
-    return (errors <= MAX_ERRORS);
+    printf("Preamble errors: %d\n", errors);
+    return (errors <= 1);
 }
 
-// Enhanced start sequence detection
 int check_start_sequence(uint64_t *next_sample_cycle) {
-    printf("Reading start sequence: ");
     uint8_t start_byte = 0;
+    printf("Start sequence bits: ");
     for (int i = 0; i < 8; i++) {
-        if (read_bit(next_sample_cycle)) {
+        int bit = read_bit(next_sample_cycle);
+        printf("%d", bit);
+        if (bit) {
             start_byte |= (1 << i);
         }
     }
-    printf(" (0x%02X)\n", start_byte);
-    return (start_byte == 0x0F);  // 11110000
+    printf("\nStart byte: 0x%02X\n", start_byte);
+    return (start_byte == 0x0F);
 }
 
 uint8_t read_byte(uint64_t *next_sample_cycle) {
-    if (DEBUG_BITS) printf("Reading byte: ");
     uint8_t byte = 0;
     for (int i = 0; i < 8; i++) {
         if (read_bit(next_sample_cycle)) {
             byte |= (1 << i);
         }
     }
-    if (DEBUG_BITS) printf(" (0x%02X)\n", byte);
     return byte;
 }
 
@@ -155,41 +191,24 @@ void receive_messages(void) {
     int buffer_pos = 0;
     int state = STATE_LOOKING_FOR_PREAMBLE;
     uint64_t next_sample_cycle;
-    uint64_t last_transition = 0;
-    int consecutive_fails = 0;
     
     printf("Waiting for transmission...\n");
     
     while (1) {
         switch (state) {
-            case STATE_LOOKING_FOR_PREAMBLE: {
-                // Wait for stable high signal
-                int stable_count = 0;
-                while (stable_count < 100) {  // Require 100 consistent samples
-                    if (GPIO_GET(GPIO_PIN)) {
-                        stable_count++;
-                    } else {
-                        stable_count = 0;
-                    }
-                    for(volatile int i = 0; i < 100; i++); // Small delay
+            case STATE_LOOKING_FOR_PREAMBLE:
+                // Wait for any high signal
+                while (!GPIO_GET(GPIO_PIN)) {
+                    asm volatile("nop");
                 }
-                
-                next_sample_cycle = get_cycles() + cycles_per_sample_offset;
                 
                 if (detect_preamble(&next_sample_cycle)) {
-                    printf("\nValid preamble detected, checking start sequence...\n");
+                    printf("Valid preamble detected, checking start sequence...\n");
                     state = STATE_CHECKING_START;
-                    consecutive_fails = 0;
                 } else {
-                    consecutive_fails++;
-                    if (consecutive_fails > 10) {
-                        printf("\nToo many failed preamble attempts, resetting...\n");
-                        usleep(1000);  // Add small delay before retrying
-                        consecutive_fails = 0;
-                    }
+                    usleep(1000);  // Wait a bit before trying again
                 }
                 break;
-            }
                 
             case STATE_CHECKING_START:
                 if (check_start_sequence(&next_sample_cycle)) {
@@ -202,23 +221,13 @@ void receive_messages(void) {
                 }
                 break;
                 
-            case STATE_RECEIVING_DATA: {
+            case STATE_RECEIVING_DATA:
                 uint8_t byte = read_byte(&next_sample_cycle);
+                printf("Received byte: 0x%02X\n", byte);
                 
-                // Check for end sequence (00001111)
-                if (byte == 0xF0) {
+                if (byte == 0xF0) {  // End sequence
                     buffer[buffer_pos] = '\0';
-                    printf("\nEnd sequence detected!\n");
-                    printf("Message received (%d bytes): '%s'\n", buffer_pos, buffer);
-                    printf("Message in hex: ");
-                    for(int i = 0; i < buffer_pos; i++) {
-                        printf("%02X ", buffer[i]);
-                    }
-                    printf("\n");
-                    state = STATE_LOOKING_FOR_PREAMBLE;
-                } else if (byte == 0 && buffer_pos == 0) {
-                    // Likely noise or misaligned, restart
-                    printf("Zero byte at start, restarting...\n");
+                    printf("Message received: %s\n", buffer);
                     state = STATE_LOOKING_FOR_PREAMBLE;
                 } else {
                     buffer[buffer_pos++] = byte;
@@ -228,7 +237,6 @@ void receive_messages(void) {
                     }
                 }
                 break;
-            }
         }
     }
 }
@@ -250,11 +258,9 @@ int main(void) {
     setup_io();
     INP_GPIO(GPIO_PIN);
 
-    printf("OOK Signal Receiver (Debug Version)\n");
+    printf("OOK Signal Receiver with Edge Synchronization\n");
     printf("Listening on GPIO %d\n", GPIO_PIN);
-    printf("Bit duration: %d ns\n", BIT_DURATION_NS);
-    printf("Sample offset: %d ns\n", SAMPLE_OFFSET_NS);
-    printf("Looking for alternating 1-0 preamble pattern\n");
+    printf("Initial bit duration: %d ns\n", BIT_DURATION_NS);
     printf("Press Ctrl+C to stop.\n\n");
 
     receive_messages();
