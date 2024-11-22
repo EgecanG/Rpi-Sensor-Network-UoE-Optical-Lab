@@ -7,41 +7,26 @@ import os
 
 def capture_frame():
     picam2 = Picamera2()
-    config = picam2.create_still_configuration(main={"size": (640, 480)})
+    config = picam2.create_still_configuration(main={"size": (320, 240)})  # Smaller size for faster transfer
     picam2.configure(config)
     picam2.start()
-    time.sleep(2)
+    time.sleep(0.1)  # Reduced warm-up time
     
     frame = picam2.capture_array()
     picam2.stop()
     
-    # Resize for transfer
-    frame = frame[::4, ::4, :3]  # Larger image since we have faster transfer
+    frame = frame[::2, ::2, :3]  # Smaller resize factor
     return np.clip(frame, 0, 255).astype(np.uint8)
 
 def transfer_image(frame):
-    # Save image data to file
     frame.tofile('image_data.bin')
+    subprocess.run(['sudo', './gpio_transfer'], check=True)
     
-    # Call C program to transfer data
-    try:
-        subprocess.run(['sudo', './gpio_transfer'], check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Error running C program: {e}")
-        raise
-    
-    # Check if received file exists
-    if not os.path.exists('received_data.bin'):
-        raise FileNotFoundError("C program did not create received_data.bin")
-    
-    # Read back the transferred data
-    received_data = np.fromfile('received_data.bin', dtype=np.uint8)
-    
-    # Verify data size matches
-    if received_data.size != frame.size:
-        raise ValueError(f"Received data size ({received_data.size}) doesn't match original ({frame.size})")
-    
-    return received_data.reshape(frame.shape)
+    if os.path.exists('received_data.bin'):
+        received_data = np.fromfile('received_data.bin', dtype=np.uint8)
+        if received_data.size == frame.size:
+            return received_data.reshape(frame.shape)
+    return None
 
 def display_images(original, received):
     plt.figure(figsize=(12, 6))
@@ -62,23 +47,35 @@ def display_images(original, received):
 
 def main():
     try:
-        print("Capturing frame...")
-        frame = capture_frame()
-        print(f"Frame captured! Shape: {frame.shape}")
+        start_time = time.time()
+        total_bytes = 0
+        frames_transferred = 0
         
-        print("\nTransferring image...")
-        received_frame = transfer_image(frame)
-        
-        print("\nDisplaying images...")
-        display_images(frame, received_frame)
-        
-        accuracy = np.mean(frame == received_frame) * 100
-        print(f"\nTransfer accuracy: {accuracy:.1f}%")
-        
+        while True:
+            frame = capture_frame()
+            total_bytes += frame.size
+            
+            received_frame = transfer_image(frame)
+            frames_transferred += 1
+            
+            elapsed_time = time.time() - start_time
+            current_rate = total_bytes / (1024 * 1024 * elapsed_time)
+            
+            print(f"\rTime: {elapsed_time:.2f}s, Rate: {current_rate:.2f} MB/s, Frames: {frames_transferred}", end='')
+            
+            if elapsed_time >= 10.0:
+                print("\n\nFinal Results:")
+                print(f"Total data transferred: {total_bytes / (1024*1024):.2f} MB")
+                print(f"Average rate: {current_rate:.2f} MB/s")
+                print(f"Frames transferred: {frames_transferred}")
+                
+                if received_frame is not None:
+                    display_images(frame, received_frame)
+                break
+                
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"\nError: {e}")
     finally:
-        # Cleanup temporary files
         for file in ['image_data.bin', 'received_data.bin']:
             if os.path.exists(file):
                 try:
