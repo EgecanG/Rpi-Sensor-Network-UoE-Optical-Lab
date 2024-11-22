@@ -2,6 +2,8 @@ from picamera2 import Picamera2
 import numpy as np
 import subprocess
 import matplotlib.pyplot as plt
+import time
+import os
 
 def capture_frame():
     picam2 = Picamera2()
@@ -22,10 +24,23 @@ def transfer_image(frame):
     frame.tofile('image_data.bin')
     
     # Call C program to transfer data
-    subprocess.run(['sudo', './gpio_transfer'], check=True)
+    try:
+        subprocess.run(['sudo', './gpio_transfer'], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error running C program: {e}")
+        raise
+    
+    # Check if received file exists
+    if not os.path.exists('received_data.bin'):
+        raise FileNotFoundError("C program did not create received_data.bin")
     
     # Read back the transferred data
     received_data = np.fromfile('received_data.bin', dtype=np.uint8)
+    
+    # Verify data size matches
+    if received_data.size != frame.size:
+        raise ValueError(f"Received data size ({received_data.size}) doesn't match original ({frame.size})")
+    
     return received_data.reshape(frame.shape)
 
 def display_images(original, received):
@@ -62,6 +77,14 @@ def main():
         
     except Exception as e:
         print(f"Error: {e}")
+    finally:
+        # Cleanup temporary files
+        for file in ['image_data.bin', 'received_data.bin']:
+            if os.path.exists(file):
+                try:
+                    os.remove(file)
+                except Exception as e:
+                    print(f"Warning: Could not remove {file}: {e}")
 
 if __name__ == "__main__":
     main()

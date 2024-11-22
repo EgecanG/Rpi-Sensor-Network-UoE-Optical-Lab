@@ -1,146 +1,89 @@
-// gpio_transfer.c
+#include <wiringPi.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <unistd.h>
-#include <time.h>
 #include <stdint.h>
+#include <time.h>
 
-// GPIO setup
-#define BCM2708_PERI_BASE 0x3F000000  // Raspberry Pi 3/4
-#define GPIO_BASE (BCM2708_PERI_BASE + 0x200000)
-#define BLOCK_SIZE (4*1024)
+#define TX_PIN 17   // GPIO 4
+#define RX_PIN 26  // GPIO 26
 
-// GPIO pins
-#define TX_PIN 17
-#define RX_PIN 26
-
-// GPIO setup registers
-#define GPIO_INPUT  0
-#define GPIO_OUTPUT 1
-
-// Volatile pointer for GPIO memory mapping
-volatile uint32_t *gpio;
-
-// GPIO access functions
-void setup_gpio_memory() {
-    int mem_fd;
-    void *gpio_map;
-
-    if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC)) < 0) {
-        printf("Failed to open /dev/mem\n");
-        exit(-1);
-    }
-
-    gpio_map = mmap(
-        NULL,
-        BLOCK_SIZE,
-        PROT_READ|PROT_WRITE,
-        MAP_SHARED,
-        mem_fd,
-        GPIO_BASE
-    );
-
-    close(mem_fd);
-
-    if (gpio_map == MAP_FAILED) {
-        printf("mmap failed\n");
-        exit(-1);
-    }
-
-    gpio = (volatile uint32_t *)gpio_map;
-}
-
-void setup_gpio() {
-    // Set TX as output
-    int reg = TX_PIN / 10;
-    int shift = (TX_PIN % 10) * 3;
-    gpio[reg] = (gpio[reg] & ~(7 << shift)) | (1 << shift);
-
-    // Set RX as input
-    reg = RX_PIN / 10;
-    shift = (RX_PIN % 10) * 3;
-    gpio[reg] = (gpio[reg] & ~(7 << shift));
-}
-
-// Fast GPIO operations
-inline void gpio_write(int value) {
-    if (value)
-        gpio[7] = 1 << TX_PIN;  // Set bit (output high)
-    else
-        gpio[10] = 1 << TX_PIN; // Clear bit (output low)
-}
-
-inline int gpio_read() {
-    return (gpio[13] >> RX_PIN) & 1;
-}
-
-// Fast byte transfer functions
 void send_byte(unsigned char byte) {
     for (int i = 0; i < 8; i++) {
-        gpio_write((byte >> i) & 1);
-        // Minimal delay using NOP
-        asm volatile("nop");
+        digitalWrite(TX_PIN, (byte >> i) & 1);
+        delayMicroseconds(1);
     }
 }
 
 unsigned char receive_byte() {
     unsigned char byte = 0;
     for (int i = 0; i < 8; i++) {
-        byte |= (gpio_read() << i);
-        // Minimal delay using NOP
-        asm volatile("nop");
+        byte |= (digitalRead(RX_PIN) << i);
+        delayMicroseconds(1);
     }
     return byte;
 }
 
-// Main transfer function
-void transfer_data(unsigned char *data, size_t size) {
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+int main() {
+    // Setup
+    if (wiringPiSetupGpio() == -1) {
+        printf("WiringPi setup failed\n");
+        return 1;
+    }
 
-    for (size_t i = 0; i < size; i++) {
-        send_byte(data[i]);
+    // Configure pins
+    pinMode(TX_PIN, OUTPUT);
+    pinMode(RX_PIN, INPUT);
+    
+    printf("GPIO setup complete\n");
+
+    // Open input and output files
+    FILE *infile = fopen("image_data.bin", "rb");
+    if (infile == NULL) {
+        printf("Could not open input file\n");
+        return 1;
+    }
+    
+    FILE *outfile = fopen("received_data.bin", "wb");
+    if (outfile == NULL) {
+        printf("Could not open output file\n");
+        fclose(infile);
+        return 1;
+    }
+
+    // Get file size
+    fseek(infile, 0, SEEK_END);
+    long size = ftell(infile);
+    fseek(infile, 0, SEEK_SET);
+    printf("File size: %ld bytes\n", size);
+
+    // Transfer data
+    clock_t start = clock();
+    unsigned char byte;
+    long bytes_transferred = 0;
+
+    while (fread(&byte, 1, 1, infile) == 1) {
+        send_byte(byte);
+        unsigned char received = receive_byte();
+        fwrite(&received, 1, 1, outfile);
         
-        if (i % 1024 == 0) {
-            clock_gettime(CLOCK_MONOTONIC, &end);
-            double elapsed = (end.tv_sec - start.tv_sec) + 
-                           (end.tv_nsec - start.tv_nsec) / 1e9;
-            double rate = (i / elapsed) / (1024 * 1024);
-            printf("\rTransfer rate: %.2f MB/s", rate);
+        bytes_transferred++;
+        if (bytes_transferred % 1024 == 0) {
+            printf("\rProgress: %ld%%", (bytes_transferred * 100) / size);
             fflush(stdout);
         }
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double total_time = (end.tv_sec - start.tv_sec) + 
-                       (end.tv_nsec - start.tv_nsec) / 1e9;
-    double final_rate = (size / total_time) / (1024 * 1024);
-    printf("\nTransfer complete. Average rate: %.2f MB/s\n", final_rate);
-}
-
-int main() {
-    // Setup
-    setup_gpio_memory();
-    setup_gpio();
-
-    // Test speed
-    printf("Testing maximum transfer speed...\n");
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    clock_t end = clock();
+    double time_taken = ((double)(end - start)) / CLOCKS_PER_SEC;
+    double speed = (bytes_transferred / (1024.0 * 1024.0)) / time_taken;
     
-    // Send 1MB of test data
-    size_t test_size = 1024 * 1024;
-    unsigned char *test_data = malloc(test_size);
-    for (size_t i = 0; i < test_size; i++) {
-        test_data[i] = i & 0xFF;
-    }
-
-    // Transfer test data
-    transfer_data(test_data, test_size);
+    printf("\nTransfer complete!\n");
+    printf("Bytes transferred: %ld\n", bytes_transferred);
+    printf("Time taken: %.2f seconds\n", time_taken);
+    printf("Speed: %.2f MB/s\n", speed);
 
     // Cleanup
-    free(test_data);
+    fclose(infile);
+    fclose(outfile);
     return 0;
 }
