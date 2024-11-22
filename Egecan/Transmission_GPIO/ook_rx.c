@@ -122,57 +122,57 @@ inline int read_bit(uint64_t *next_sample_cycle) {
         asm volatile("nop");
     }
     
-    int bit = GPIO_GET(GPIO_PIN);
+    int bit = (GPIO_GET(GPIO_PIN) != 0);  // Ensure it's exactly 0 or 1
     *next_sample_cycle += cycles_per_bit;
     
     return bit;
 }
 
-// Look for preamble pattern with timing synchronization
 int detect_preamble(uint64_t *next_sample_cycle) {
     uint64_t bit_time = synchronize_bits();
     if (bit_time == 0) {
         return 0;
     }
     
-    // Adjust our bit timing based on measured transitions
-    cycles_per_bit = bit_time * 2;  // Two transitions per bit
-    *next_sample_cycle = get_cycles() + (cycles_per_bit / 2);  // Start sampling in middle of bit
+    cycles_per_bit = bit_time * 2;
+    *next_sample_cycle = get_cycles() + (cycles_per_bit / 2);
     
     printf("Adjusted cycles per bit: %u\n", cycles_per_bit);
     
-    // Read 8 bits and check if they match our pattern
+    // Read and store 8 bits
     int bits[8];
-    printf("Reading preamble bits: ");
+    int pattern[8] = {1,0,1,0,1,0,1,0};  // Expected pattern
+    int errors = 0;
+    
+    printf("Reading preamble bits: [");
     for (int i = 0; i < 8; i++) {
         bits[i] = read_bit(next_sample_cycle);
-        printf("%d", bits[i]);
-    }
-    printf("\n");
-    
-    // Check for alternating pattern (allowing one error)
-    int errors = 0;
-    for (int i = 0; i < 8; i++) {
-        if (bits[i] != (i % 2)) {
+        printf("%d", bits[i]);  // Print just 0 or 1
+        if (i < 7) printf(",");
+        
+        // Compare with expected pattern
+        if (bits[i] != pattern[i]) {
             errors++;
         }
     }
+    printf("] (errors: %d)\n", errors);
     
-    printf("Preamble errors: %d\n", errors);
-    return (errors <= 1);
+    return (errors <= 1);  // Allow up to 1 error
 }
 
 int check_start_sequence(uint64_t *next_sample_cycle) {
     uint8_t start_byte = 0;
-    printf("Start sequence bits: ");
+    printf("Start sequence bits: [");
     for (int i = 0; i < 8; i++) {
         int bit = read_bit(next_sample_cycle);
         printf("%d", bit);
+        if (i < 7) printf(",");
         if (bit) {
             start_byte |= (1 << i);
         }
     }
-    printf("\nStart byte: 0x%02X\n", start_byte);
+    printf("]\n");
+    printf("Start byte: 0x%02X (expected 0x0F)\n", start_byte);
     return (start_byte == 0x0F);
 }
 
