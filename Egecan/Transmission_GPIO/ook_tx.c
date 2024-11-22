@@ -20,6 +20,10 @@
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
 #define BIT_DURATION_NS 250     // 250ns per bit
+#define MESSAGE_SIZE 8          // Fixed 8-byte message size
+#define PREAMBLE_BYTES 2        // 2-byte preamble
+#define START_SEQUENCE 0xAA     // Start sequence byte
+#define END_SEQUENCE 0x55       // End sequence byte
 
 volatile unsigned *gpio;
 volatile unsigned *gpio_set;
@@ -39,17 +43,6 @@ uint64_t get_cpu_freq(void) {
     return freq;
 }
 
-void set_process_priority(void) {
-    if (setpriority(PRIO_PROCESS, 0, -20) != 0) {
-        perror("Failed to set process priority");
-    }
-
-    struct sched_param sp = { .sched_priority = sched_get_priority_max(SCHED_FIFO) };
-    if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-        perror("Failed to set real-time priority");
-    }
-}
-
 void setup_io(void) {
     int mem_fd;
     void *gpio_map;
@@ -59,15 +52,7 @@ void setup_io(void) {
         exit(-1);
     }
 
-    gpio_map = mmap(
-        NULL,
-        BLOCK_SIZE,
-        PROT_READ|PROT_WRITE,
-        MAP_SHARED,
-        mem_fd,
-        GPIO_BASE
-    );
-
+    gpio_map = mmap(NULL, BLOCK_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, GPIO_BASE);
     close(mem_fd);
 
     if (gpio_map == MAP_FAILED) {
@@ -78,7 +63,7 @@ void setup_io(void) {
     gpio = (volatile unsigned *)gpio_map;
     gpio_set = gpio + 7;
     gpio_clr = gpio + 10;
-    gpio_bit = 1 << 4;
+    gpio_bit = 1 << 4;  // GPIO 4
 
     uint64_t cpu_freq = get_cpu_freq();
     cycles_per_bit = (cpu_freq * BIT_DURATION_NS) / 1000000000ULL;
@@ -90,35 +75,39 @@ void setup_io(void) {
 inline void transmit_bit(int bit) {
     uint64_t start_cycle = get_cycles();
     
-    *(gpio_set + (bit ^ 1) * 3) = gpio_bit;
+    if (bit) {
+        *gpio_set = gpio_bit;
+    } else {
+        *gpio_clr = gpio_bit;
+    }
     
     while ((get_cycles() - start_cycle) < cycles_per_bit) {
         asm volatile("nop");
     }
 }
 
-inline void transmit_byte(uint8_t byte) {
+void transmit_byte(uint8_t byte) {
     for (int i = 0; i < 8; i++) {
         transmit_bit((byte >> i) & 0x01);
     }
 }
 
-void transmit_message(const uint8_t *data, size_t length) {
-    // Transmit alternating 1-0 preamble (8 bits total)
-    for (int i = 0; i < 8; i++) {
-        transmit_bit(i & 1);  // Will transmit 1,0,1,0,1,0,1,0
+void transmit_frame(const uint8_t *message) {
+    // Transmit 2-byte preamble (0xAA 0xAA)
+    for (int i = 0; i < PREAMBLE_BYTES; i++) {
+        transmit_byte(0xAA);
     }
     
-    // Transmit a special start sequence (11110000)
-    transmit_byte(0x0F);
+    // Transmit start sequence
+    transmit_byte(START_SEQUENCE);
     
-    // Transmit data
-    for (size_t i = 0; i < length; i++) {
-        transmit_byte(data[i]);
+    // Transmit 8-byte message
+    for (int i = 0; i < MESSAGE_SIZE; i++) {
+        transmit_byte(message[i]);
     }
     
-    // Transmit end sequence (00001111)
-    transmit_byte(0xF0);
+    // Transmit end sequence
+    transmit_byte(END_SEQUENCE);
 }
 
 int main(int argc, char **argv) {
@@ -127,29 +116,38 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    set_process_priority();
+    // Set process priority
+    struct sched_param sp = { .sched_priority = sched_get_priority_max(SCHED_FIFO) };
+    if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
+        perror("Failed to set real-time priority");
+    }
 
     if (mlockall(MCL_CURRENT|MCL_FUTURE) != 0) {
         perror("mlockall failed");
     }
 
     setup_io();
-
     INP_GPIO(4);
     OUT_GPIO(4);
 
-    const char *message = argv[1];
-    size_t message_length = strlen(message);
+    const char *input_message = argv[1];
+    uint8_t message[MESSAGE_SIZE] = {0};  // Initialize with zeros
     
-    printf("Starting continuous transmission:\n");
-    printf("Message: \"%s\"\n", message);
-    printf("Message length: %zu bytes\n", message_length);
-    printf("Target bit duration: %d ns\n", BIT_DURATION_NS);
-    printf("Using alternating 1-0 preamble pattern\n");
+    // Copy input message, truncate if too long, pad with zeros if too short
+    strncpy((char *)message, input_message, MESSAGE_SIZE);
+    
+    printf("Starting transmission:\n");
+    printf("Message: \"%s\"\n", input_message);
+    printf("Frame format:\n");
+    printf("- Preamble: 2 bytes (0xAA 0xAA)\n");
+    printf("- Start sequence: 1 byte (0xAA)\n");
+    printf("- Message: 8 bytes\n");
+    printf("- End sequence: 1 byte (0x55)\n");
+    printf("Bit duration: %d ns\n", BIT_DURATION_NS);
     printf("Press Ctrl+C to stop.\n\n");
 
     while(1) {
-        transmit_message((const uint8_t *)message, message_length);
+        transmit_frame(message);
     }
 
     return 0;
