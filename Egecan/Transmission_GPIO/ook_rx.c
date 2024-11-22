@@ -19,10 +19,11 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define GPIO_GET(g) (*(gpio+13)&(1<<g))
 
-#define BIT_DURATION_NS 10000
-#define SAMPLE_OFFSET_NS 5000
+#define SAMPLES_PER_BIT 4      // Take 4 samples per bit period
+#define BIT_DURATION_NS 250    // 250ns bit period = 4MHz
+#define SAMPLE_INTERVAL_NS (BIT_DURATION_NS / SAMPLES_PER_BIT)
+#define GPIO_PIN 4             // Using GPIO 4
 #define BUFFER_SIZE 1024
-#define GPIO_PIN 4
 
 #define STATE_LOOKING_FOR_PREAMBLE 0
 #define STATE_CHECKING_START 1
@@ -30,7 +31,9 @@
 
 volatile unsigned *gpio;
 uint32_t cycles_per_bit;
-uint32_t cycles_per_sample_offset;
+uint32_t cycles_per_sample;
+uint64_t sample_count = 0;
+struct timespec start_time;
 
 static inline uint64_t get_cycles(void) {
     uint64_t cycles;
@@ -44,6 +47,25 @@ uint64_t get_cpu_freq(void) {
     return freq;
 }
 
+uint64_t get_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+void set_process_priority(void) {
+    // Set maximum priority
+    if (setpriority(PRIO_PROCESS, 0, -20) != 0) {
+        perror("Failed to set process priority");
+    }
+
+    // Set real-time FIFO scheduler
+    struct sched_param sp = { .sched_priority = sched_get_priority_max(SCHED_FIFO) };
+    if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
+        perror("Failed to set real-time priority");
+    }
+}
+
 void setup_io(void) {
     int mem_fd;
     void *gpio_map;
@@ -53,7 +75,15 @@ void setup_io(void) {
         exit(-1);
     }
 
-    gpio_map = mmap(NULL, BLOCK_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, GPIO_BASE);
+    gpio_map = mmap(
+        NULL,
+        BLOCK_SIZE,
+        PROT_READ|PROT_WRITE,
+        MAP_SHARED,
+        mem_fd,
+        GPIO_BASE
+    );
+
     close(mem_fd);
 
     if (gpio_map == MAP_FAILED) {
@@ -65,7 +95,15 @@ void setup_io(void) {
 
     uint64_t cpu_freq = get_cpu_freq();
     cycles_per_bit = (cpu_freq * BIT_DURATION_NS) / 1000000000ULL;
-    cycles_per_sample_offset = (cpu_freq * SAMPLE_OFFSET_NS) / 1000000000ULL;
+    cycles_per_sample = cycles_per_bit / SAMPLES_PER_BIT;
+    
+    printf("CPU Frequency: %lu Hz\n", cpu_freq);
+    printf("Cycles per bit: %u\n", cycles_per_bit);
+    printf("Cycles per sample: %u\n", cycles_per_sample);
+    printf("Target sampling interval: %d ns\n", SAMPLE_INTERVAL_NS);
+    printf("Target sampling rate: %d MHz\n", 1000 / SAMPLE_INTERVAL_NS);
+    
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
 }
 
 // Wait for a signal transition
@@ -87,7 +125,7 @@ int wait_for_edge(int current_level) {
 uint64_t synchronize_bits(void) {
     int transitions = 0;
     uint64_t total_cycles = 0;
-    const int REQUIRED_TRANSITIONS = 4;  // Look for 4 clean transitions
+    const int REQUIRED_TRANSITIONS = 4;
     
     int current_level = GPIO_GET(GPIO_PIN);
     printf("Initial level: %d\n", current_level);
@@ -118,14 +156,39 @@ uint64_t synchronize_bits(void) {
 }
 
 inline int read_bit(uint64_t *next_sample_cycle) {
-    while (get_cycles() < *next_sample_cycle) {
-        asm volatile("nop");
+    int high_samples = 0;
+    
+    // Take multiple samples per bit period
+    for(int i = 0; i < SAMPLES_PER_BIT; i++) {
+        while (get_cycles() < *next_sample_cycle) {
+            asm volatile("nop");
+        }
+        
+        if (GPIO_GET(GPIO_PIN)) {
+            high_samples++;
+        }
+        
+        *next_sample_cycle += cycles_per_sample;
+        sample_count++;
     }
     
-    int bit = (GPIO_GET(GPIO_PIN) != 0);  // Ensure it's exactly 0 or 1
-    *next_sample_cycle += cycles_per_bit;
+    return (high_samples > SAMPLES_PER_BIT/2);
+}
+
+void print_sampling_stats(void) {
+    struct timespec current_time;
+    clock_gettime(CLOCK_MONOTONIC, &current_time);
     
-    return bit;
+    uint64_t elapsed_ns = (current_time.tv_sec - start_time.tv_sec) * 1000000000ULL +
+                         (current_time.tv_nsec - start_time.tv_nsec);
+    
+    double actual_sampling_rate = (double)sample_count / (elapsed_ns / 1000000000.0);
+    
+    printf("\nSampling Statistics:\n");
+    printf("Total samples: %lu\n", sample_count);
+    printf("Elapsed time: %.3f seconds\n", elapsed_ns / 1000000000.0);
+    printf("Actual sampling rate: %.2f MHz\n", actual_sampling_rate / 1000000.0);
+    printf("Samples per bit: %d\n\n", SAMPLES_PER_BIT);
 }
 
 int detect_preamble(uint64_t *next_sample_cycle) {
@@ -135,29 +198,34 @@ int detect_preamble(uint64_t *next_sample_cycle) {
     }
     
     cycles_per_bit = bit_time * 2;
-    *next_sample_cycle = get_cycles() + (cycles_per_bit / 2);
+    cycles_per_sample = cycles_per_bit / SAMPLES_PER_BIT;
+    *next_sample_cycle = get_cycles() + cycles_per_sample;
     
-    printf("Adjusted cycles per bit: %u\n", cycles_per_bit);
+    printf("Adjusted timing:\n");
+    printf("Cycles per bit: %u\n", cycles_per_bit);
+    printf("Cycles per sample: %u\n", cycles_per_sample);
+    printf("Estimated actual bit duration: %lu ns\n", 
+           (bit_time * 2 * 1000000000ULL) / get_cpu_freq());
     
-    // Read and store 8 bits
     int bits[8];
-    int pattern[8] = {1,0,1,0,1,0,1,0};  // Expected pattern
+    int pattern[8] = {1,0,1,0,1,0,1,0};
     int errors = 0;
     
     printf("Reading preamble bits: [");
     for (int i = 0; i < 8; i++) {
         bits[i] = read_bit(next_sample_cycle);
-        printf("%d", bits[i]);  // Print just 0 or 1
+        printf("%d", bits[i]);
         if (i < 7) printf(",");
         
-        // Compare with expected pattern
         if (bits[i] != pattern[i]) {
             errors++;
         }
     }
     printf("] (errors: %d)\n", errors);
     
-    return (errors <= 1);  // Allow up to 1 error
+    print_sampling_stats();
+    
+    return (errors <= 1);
 }
 
 int check_start_sequence(uint64_t *next_sample_cycle) {
@@ -178,11 +246,16 @@ int check_start_sequence(uint64_t *next_sample_cycle) {
 
 uint8_t read_byte(uint64_t *next_sample_cycle) {
     uint8_t byte = 0;
+    printf("Reading byte bits: [");
     for (int i = 0; i < 8; i++) {
-        if (read_bit(next_sample_cycle)) {
+        int bit = read_bit(next_sample_cycle);
+        printf("%d", bit);
+        if (i < 7) printf(",");
+        if (bit) {
             byte |= (1 << i);
         }
     }
+    printf("] = 0x%02X\n", byte);
     return byte;
 }
 
@@ -203,7 +276,7 @@ void receive_messages(void) {
                 }
                 
                 if (detect_preamble(&next_sample_cycle)) {
-                    printf("Valid preamble detected, checking start sequence...\n");
+                    printf("\nValid preamble detected, checking start sequence...\n");
                     state = STATE_CHECKING_START;
                 } else {
                     usleep(1000);  // Wait a bit before trying again
@@ -223,12 +296,17 @@ void receive_messages(void) {
                 
             case STATE_RECEIVING_DATA:
                 uint8_t byte = read_byte(&next_sample_cycle);
-                printf("Received byte: 0x%02X\n", byte);
                 
                 if (byte == 0xF0) {  // End sequence
                     buffer[buffer_pos] = '\0';
-                    printf("Message received: %s\n", buffer);
+                    printf("\nMessage received (%d bytes): '%s'\n", buffer_pos, buffer);
+                    printf("Message in hex: ");
+                    for(int i = 0; i < buffer_pos; i++) {
+                        printf("%02X ", buffer[i]);
+                    }
+                    printf("\n");
                     state = STATE_LOOKING_FOR_PREAMBLE;
+                    print_sampling_stats();
                 } else {
                     buffer[buffer_pos++] = byte;
                     if (buffer_pos >= BUFFER_SIZE - 1) {
@@ -242,14 +320,7 @@ void receive_messages(void) {
 }
 
 int main(void) {
-    if (setpriority(PRIO_PROCESS, 0, -20) != 0) {
-        perror("Failed to set process priority");
-    }
-
-    struct sched_param sp = { .sched_priority = sched_get_priority_max(SCHED_FIFO) };
-    if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-        perror("Failed to set real-time priority");
-    }
+    set_process_priority();
 
     if (mlockall(MCL_CURRENT|MCL_FUTURE) != 0) {
         perror("mlockall failed");
@@ -258,9 +329,13 @@ int main(void) {
     setup_io();
     INP_GPIO(GPIO_PIN);
 
-    printf("OOK Signal Receiver with Edge Synchronization\n");
+    printf("\nOOK Signal Receiver with Enhanced Sampling\n");
+    printf("------------------------------------------\n");
     printf("Listening on GPIO %d\n", GPIO_PIN);
-    printf("Initial bit duration: %d ns\n", BIT_DURATION_NS);
+    printf("Bit duration: %d ns\n", BIT_DURATION_NS);
+    printf("Sampling interval: %d ns\n", SAMPLE_INTERVAL_NS);
+    printf("Samples per bit: %d\n", SAMPLES_PER_BIT);
+    printf("------------------------------------------\n");
     printf("Press Ctrl+C to stop.\n\n");
 
     receive_messages();
