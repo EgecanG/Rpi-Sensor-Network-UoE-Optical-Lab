@@ -19,8 +19,8 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define GPIO_GET(g) (*(gpio+13)&(1<<g))
 
-#define BIT_DURATION_NS 1000
-#define SAMPLE_OFFSET_NS 500
+#define BIT_DURATION_NS 10000
+#define SAMPLE_OFFSET_NS 5000
 #define BUFFER_SIZE 1024
 #define GPIO_PIN 4
 
