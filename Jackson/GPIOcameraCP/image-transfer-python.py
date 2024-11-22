@@ -3,7 +3,6 @@ import numpy as np
 import subprocess
 import cv2
 import time
-import sys
 
 def capture_frame():
     # Initialize camera
@@ -21,66 +20,54 @@ def capture_frame():
     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     return frame.astype(np.uint8)
 
-def send_frame(frame):
-    # Start the C program to send bits
-    process = subprocess.Popen(['sudo', './gpio_transfer', 'send'], 
-                             stdin=subprocess.PIPE)
+def transfer_frame(frame):
+    # Save frame to binary file
+    frame.tofile('image_data.bin')
     
-    # Send frame data byte by byte
-    process.stdin.write(frame.tobytes())
-    process.stdin.close()
-    process.wait()
-
-def receive_frame(shape):
-    # Calculate total bytes needed
-    total_bytes = shape[0] * shape[1] * shape[2]
-    
-    # Start the C program to receive bits
-    process = subprocess.Popen(['sudo', './gpio_transfer', 'receive'],
-                             stdout=subprocess.PIPE)
-    
-    # Read exact number of bytes needed
-    received_data = process.stdout.read(total_bytes)
-    process.terminate()
-    
-    # Convert back to numpy array
-    return np.frombuffer(received_data, dtype=np.uint8).reshape(shape)
+    # Run the C program for transfer
+    try:
+        subprocess.run(['sudo', './gpio_transfer'], check=True)
+        
+        # Read the received data
+        received_data = np.fromfile('received_data.bin', dtype=np.uint8)
+        return received_data.reshape(frame.shape)
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Transfer error: {e}")
+        return None
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} [send|receive]")
-        return
-
-    if sys.argv[1] == "send":
-        # Capture and send frame
+    try:
+        # Capture frame
+        print("Capturing frame...")
         frame = capture_frame()
-        print(f"Captured frame shape: {frame.shape}")
+        print(f"Frame captured: shape={frame.shape}")
         
         # Display original frame
-        cv2.imshow('Sending Frame', frame)
-        cv2.waitKey(1000)
+        cv2.imshow('Original Frame', frame)
+        cv2.waitKey(1)
         
-        # Send frame
-        send_frame(frame)
+        # Transfer frame
+        print("\nTransferring frame...")
+        received_frame = transfer_frame(frame)
         
-        # Save frame for verification
-        cv2.imwrite('sent_frame.jpg', frame)
+        if received_frame is not None:
+            # Display both frames
+            cv2.imshow('Original Frame', frame)
+            cv2.imshow('Received Frame', received_frame)
+            
+            # Calculate accuracy
+            accuracy = np.mean(frame == received_frame) * 100
+            print(f"\nTransfer accuracy: {accuracy:.1f}%")
+            
+            # Wait for key press
+            cv2.waitKey(0)
         
-    elif sys.argv[1] == "receive":
-        # Known frame shape (must match sender)
-        shape = (120, 160, 3)
+    except Exception as e:
+        print(f"Error: {e}")
         
-        # Receive frame
-        frame = receive_frame(shape)
-        
-        # Display received frame
-        cv2.imshow('Received Frame', frame)
-        cv2.waitKey(0)
-        
-        # Save received frame
-        cv2.imwrite('received_frame.jpg', frame)
-
-    cv2.destroyAllWindows()
+    finally:
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
