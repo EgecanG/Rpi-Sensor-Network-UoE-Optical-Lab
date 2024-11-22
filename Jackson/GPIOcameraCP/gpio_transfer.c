@@ -14,62 +14,88 @@
 
 volatile unsigned *gpio;
 
+// Inline assembly for precise delay
+static inline void delay_cycles(int cycles) {
+    for(int i = 0; i < cycles; i++) {
+        asm volatile("nop");
+    }
+}
+
+static inline void gpio_set(void) {
+    *(gpio + 7) = 1 << TX_PIN;
+}
+
+static inline void gpio_clear(void) {
+    *(gpio + 10) = 1 << TX_PIN;
+}
+
+static inline int gpio_read(void) {
+    return (*(gpio + 13) >> RX_PIN) & 1;
+}
+
 int setup_gpio() {
     int mem_fd;
     void *gpio_map;
 
     mem_fd = open("/dev/gpiomem", O_RDWR|O_SYNC);
-    if (mem_fd < 0) {
-        printf("Error opening /dev/gpiomem\n");
-        return -1;
-    }
+    if (mem_fd < 0) return -1;
 
     gpio_map = mmap(NULL, BLOCK_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, GPIO_BASE);
     close(mem_fd);
-
-    if (gpio_map == MAP_FAILED) {
-        printf("mmap error\n");
-        return -1;
-    }
+    if (gpio_map == MAP_FAILED) return -1;
 
     gpio = (volatile unsigned *)gpio_map;
-
-    // Configure pins
+    
+    // Configure pins - optimized setup
     *(gpio + (TX_PIN/10)) &= ~(7<<((TX_PIN%10)*3));
-    *(gpio + (TX_PIN/10)) |=  (1<<((TX_PIN%10)*3));  // Set TX as output
-    *(gpio + (RX_PIN/10)) &= ~(7<<((RX_PIN%10)*3));  // Set RX as input
-
+    *(gpio + (TX_PIN/10)) |=  (1<<((TX_PIN%10)*3));
+    *(gpio + (RX_PIN/10)) &= ~(7<<((RX_PIN%10)*3));
+    
     return 0;
 }
 
-void transfer_bit(unsigned char bit, unsigned char *received) {
-    // Send bit
-    if (bit) {
-        *(gpio + 7) = 1 << TX_PIN;   // Set high
-    } else {
-        *(gpio + 10) = 1 << TX_PIN;  // Set low
-    }
-    
-    usleep(100);  // Wait for signal to stabilize
-    
-    // Read received bit
-    *received = (*(gpio + 13) >> RX_PIN) & 1;
-    
-    usleep(100);  // Wait before next bit
-}
-
-int transfer_byte(unsigned char byte, unsigned char *received_byte) {
-    unsigned char received_bit;
+void transfer_byte(unsigned char byte, unsigned char *received_byte) {
     *received_byte = 0;
     
-    // Transfer each bit
-    for (int i = 0; i < 8; i++) {
-        transfer_bit((byte >> i) & 1, &received_bit);
-        *received_byte |= (received_bit << i);
-    }
+    // Unrolled loop for maximum speed
+    gpio_clear();
+    delay_cycles(1);
+    if(byte & 0x01) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 0);
     
-    return 0;
+    if(byte & 0x02) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 1);
+    
+    if(byte & 0x04) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 2);
+    
+    if(byte & 0x08) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 3);
+    
+    if(byte & 0x10) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 4);
+    
+    if(byte & 0x20) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 5);
+    
+    if(byte & 0x40) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 6);
+    
+    if(byte & 0x80) gpio_set(); else gpio_clear();
+    delay_cycles(1);
+    *received_byte |= (gpio_read() << 7);
+    
+    gpio_clear();
 }
+
+#define BUFFER_SIZE 4096
 
 int main() {
     if (setup_gpio() < 0) return 1;
@@ -88,31 +114,46 @@ int main() {
     fseek(infile, 0, SEEK_SET);
     printf("File size: %ld bytes\n", size);
 
-    // Transfer data
-    unsigned char byte, received_byte;
-    long bytes_transferred = 0;
-    clock_t start = clock();
-
-    while (fread(&byte, 1, 1, infile) == 1) {
-        transfer_byte(byte, &received_byte);
-        fwrite(&received_byte, 1, 1, outfile);
-        
-        bytes_transferred++;
-        if (bytes_transferred % 1024 == 0) {
-            printf("\rProgress: %ld%%", (bytes_transferred * 100) / size);
-            fflush(stdout);
-        }
+    // Allocate buffers for block transfer
+    unsigned char *in_buffer = malloc(BUFFER_SIZE);
+    unsigned char *out_buffer = malloc(BUFFER_SIZE);
+    
+    if (!in_buffer || !out_buffer) {
+        printf("Memory allocation error\n");
+        return 1;
     }
 
-    clock_t end = clock();
-    double time_taken = ((double)(end - start)) / CLOCKS_PER_SEC;
+    // Transfer data with timing measurement
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    
+    long bytes_transferred = 0;
+    size_t bytes_read;
+    
+    while ((bytes_read = fread(in_buffer, 1, BUFFER_SIZE, infile)) > 0) {
+        for (size_t i = 0; i < bytes_read; i++) {
+            transfer_byte(in_buffer[i], &out_buffer[i]);
+        }
+        fwrite(out_buffer, 1, bytes_read, outfile);
+        
+        bytes_transferred += bytes_read;
+        printf("\rProgress: %ld%%", (bytes_transferred * 100) / size);
+        fflush(stdout);
+    }
+
+    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+    
+    double time_taken = ((end.tv_sec - start.tv_sec) * 1000000000.0 + 
+                        (end.tv_nsec - start.tv_nsec)) / 1000000000.0;
     double speed = (bytes_transferred / (1024.0 * 1024.0)) / time_taken;
 
     printf("\nTransfer complete!\n");
     printf("Bytes transferred: %ld\n", bytes_transferred);
-    printf("Time taken: %.2f seconds\n", time_taken);
+    printf("Time taken: %.3f seconds\n", time_taken);
     printf("Speed: %.2f MB/s\n", speed);
 
+    free(in_buffer);
+    free(out_buffer);
     fclose(infile);
     fclose(outfile);
     munmap((void*)gpio, BLOCK_SIZE);
