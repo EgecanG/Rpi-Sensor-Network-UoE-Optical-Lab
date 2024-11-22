@@ -22,7 +22,7 @@
 #define GPIO_GET(g) (*(gpio+13)&(1<<(g))) // 0 if low, >0 if high
 
 // UART Configuration - must match transmitter
-#define BAUD_RATE 2000000
+#define BAUD_RATE 9600
 #define BIT_DURATION_NS (1000000000 / BAUD_RATE)  // Nanoseconds per bit
 #define DATA_BITS 8
 #define USE_PARITY true

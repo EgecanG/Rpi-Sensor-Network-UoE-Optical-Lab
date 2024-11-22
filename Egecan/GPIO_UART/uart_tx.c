@@ -21,7 +21,7 @@
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
 // UART Configuration
-#define BAUD_RATE 2000000
+#define BAUD_RATE 9600
 #define BIT_DURATION_NS (1000000000 / BAUD_RATE)  // Nanoseconds per bit
 #define DATA_BITS 8
 #define USE_PARITY true
@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
     
     while(1) {
         transmit_uart_frame((const uint8_t *)input_message, message_length);
-        usleep(1000);  // Add some delay between transmissions (1ms)
+        usleep(100000);  // Add some delay between transmissions (100ms)
     }
 
     return 0;
