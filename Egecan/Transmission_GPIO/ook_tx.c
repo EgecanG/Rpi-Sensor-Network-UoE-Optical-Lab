@@ -19,7 +19,7 @@
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
 #define OUT_GPIO(g) *(gpio+((g)/10)) |=  (1<<(((g)%10)*3))
 
-#define BIT_DURATION_NS 250     // 250ns per bit
+#define BIT_DURATION_NS 100     // 250ns per bit
 #define MESSAGE_SIZE 8          // Fixed 8-byte message size
 #define PREAMBLE_BYTES 2        // 2-byte preamble
 #define START_SEQUENCE 0xAA     // Start sequence byte
