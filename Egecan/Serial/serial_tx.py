@@ -6,7 +6,7 @@ def setup_uart_sender():
     # Configure serial port
     uart = serial.Serial(
         port='/dev/ttyAMA0',  # Serial port name
-        baudrate=115200,      # Must match on both devices
+        baudrate=921600,      # Must match on both devices
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
