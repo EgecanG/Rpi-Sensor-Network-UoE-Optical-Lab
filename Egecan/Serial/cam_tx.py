@@ -12,19 +12,17 @@ def setup_uart_sender():
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
-        timeout=2  # Increased timeout for larger frames
+        timeout=2
     )
     return uart
 
 def setup_camera():
     camera = Picamera2()
-    # Configure camera for HD resolution
     config = camera.create_still_configuration(
         main={"size": (1280, 720), "format": "RGB888"},
     )
     camera.configure(config)
     camera.start()
-    # Allow camera to warm up
     time.sleep(2)
     return camera
 
@@ -32,31 +30,35 @@ def send_frame(uart, frame):
     try:
         start_time = time.time()
         
-        # Compress frame with higher quality
         _, encoded_frame = cv2.imencode('.jpg', frame, [
             cv2.IMWRITE_JPEG_QUALITY, 85,
             cv2.IMWRITE_PNG_COMPRESSION, 0
         ])
         frame_data = encoded_frame.tobytes()
         
-        # Calculate checksum
         checksum = zlib.crc32(frame_data)
-        
-        # Print frame size for monitoring
         print(f"Frame size: {len(frame_data) / 1024:.2f} KB")
         
-        # Send header: [size(4 bytes) + checksum(4 bytes)]
+        # Send header
         header = len(frame_data).to_bytes(4, byteorder='big')
         header += checksum.to_bytes(4, byteorder='big')
         uart.write(header)
+        uart.flush()
+        time.sleep(0.005)  # Wait after header
         
-        # Send frame data in larger chunks
-        chunk_size = 4096  # Increased chunk size
+        # Send frame data in smaller chunks
+        chunk_size = 256  # Reduced chunk size
+        chunks_sent = 0
+        total_chunks = len(frame_data) // chunk_size + (1 if len(frame_data) % chunk_size else 0)
+        
         for i in range(0, len(frame_data), chunk_size):
             chunk = frame_data[i:i + chunk_size]
             uart.write(chunk)
             uart.flush()
-            time.sleep(0.002)  # Slightly increased delay
+            chunks_sent += 1
+            if chunks_sent % 20 == 0:  # Progress update every 20 chunks
+                print(f"Progress: {chunks_sent}/{total_chunks} chunks")
+            time.sleep(0.003)  # Increased delay between chunks
             
         # Wait for acknowledgment
         ack = uart.read(1)
@@ -83,7 +85,7 @@ def main():
             frame_count += 1
             print(f"Sent frame {frame_count}")
             
-            # Calculate sleep time to maintain 1 FPS
+            # Wait for next second
             elapsed = time.time() - start_time
             sleep_time = max(0, 1.0 - elapsed)
             if sleep_time > 0:

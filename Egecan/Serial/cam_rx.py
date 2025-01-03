@@ -11,7 +11,7 @@ def setup_uart_receiver():
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
-        timeout=2  # Increased timeout for larger frames
+        timeout=2
     )
     return uart
 
@@ -19,7 +19,7 @@ def receive_frame(uart):
     try:
         start_time = time.time()
         
-        # Read header (8 bytes: 4 for size + 4 for checksum)
+        # Read header
         header = uart.read(8)
         if not header or len(header) < 8:
             print("Failed to receive header")
@@ -30,9 +30,11 @@ def receive_frame(uart):
         
         print(f"Expecting frame of size: {frame_size / 1024:.2f} KB")
         
-        # Read frame data with larger buffer
+        # Read frame data in smaller chunks
         frame_data = bytearray()
-        chunk_size = 4096  # Increased chunk size
+        chunk_size = 256  # Reduced chunk size
+        chunks_received = 0
+        total_chunks = frame_size // chunk_size + (1 if frame_size % chunk_size else 0)
         
         while len(frame_data) < frame_size:
             remaining = frame_size - len(frame_data)
@@ -40,11 +42,15 @@ def receive_frame(uart):
             chunk = uart.read(current_chunk_size)
             
             if not chunk:
-                print(f"Failed to receive complete frame. Got {len(frame_data)} of {frame_size} bytes")
+                print(f"Failed to receive chunk. Got {len(frame_data)} of {frame_size} bytes")
                 return None
                 
             frame_data.extend(chunk)
+            chunks_received += 1
             
+            if chunks_received % 20 == 0:  # Progress update every 20 chunks
+                print(f"Progress: {chunks_received}/{total_chunks} chunks")
+        
         # Verify checksum
         actual_checksum = zlib.crc32(frame_data)
         if actual_checksum != expected_checksum:
