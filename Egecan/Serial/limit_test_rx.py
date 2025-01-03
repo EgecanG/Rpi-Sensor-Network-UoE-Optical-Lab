@@ -18,7 +18,7 @@ def receive_message(uart):
     counter = 0
     total_bytes_sent = 0
     total_byte_errors = 0
-    expected_size = 5120  # 5KB
+    expected_size = 1000  # 5KB
     expected_pattern = "ABCDEFGHIJ"
     
     try:

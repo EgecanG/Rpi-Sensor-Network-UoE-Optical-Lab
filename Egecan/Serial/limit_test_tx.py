@@ -17,7 +17,7 @@ def setup_uart_sender():
 def send_message(uart):
     # Create exactly 5KB test string
     pattern = "ABCDEFGHIJ"
-    test_string = pattern * 512  # 512 * 10 = 5120 bytes (5KB)
+    test_string = pattern * 100  # 512 * 10 = 5120 bytes (5KB)
     
     counter = 0
     try:
