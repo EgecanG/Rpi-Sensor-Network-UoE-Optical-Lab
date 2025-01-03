@@ -15,7 +15,7 @@ def setup_uart_sender():
 
 def send_message(uart):
     # Create test message - "Hello" repeated 200 times
-    test_message = "Hello This is a Test Message1" * 200 + "\n"
+    test_message = "Hello Tes" * 400000 + "\n"
     counter = 0
     
     try:
@@ -28,7 +28,7 @@ def send_message(uart):
                 print(f"Received: {response}")
             
             counter += 1
-            time.sleep(0.001)
+            time.sleep(0.1)
             
     except KeyboardInterrupt:
         print("\nSending stopped by user")

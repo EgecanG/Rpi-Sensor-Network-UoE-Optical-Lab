@@ -14,7 +14,7 @@ def setup_uart_receiver():
     return uart
 
 def receive_message(uart):
-    expected_message = "Hello This is a Test Message1" * 200 + "\n"
+    expected_message = "Hello Tes" * 400000 + "\n"
     counter = 0
     error_count = 0
     
