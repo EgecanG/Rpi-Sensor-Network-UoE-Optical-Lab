@@ -1,10 +1,8 @@
-# receiver.py (Run this on second Pi)
 import serial
 import time
-import numpy as np
-from PIL import Image
-import io
 import cv2
+import numpy as np
+import pickle
 
 def setup_uart_receiver():
     uart = serial.Serial(
@@ -13,76 +11,48 @@ def setup_uart_receiver():
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
-        timeout=1
+        timeout=0.1
     )
     return uart
 
-def receive_image(uart):
-    # First receive the image size
-    size_str = uart.readline().decode().strip()
-    try:
-        size = int(size_str)
-    except ValueError:
+def receive_frame(uart):
+    # Read header with frame size
+    header = uart.read(4)
+    if not header:
         return None
-    
-    # Send ready signal
-    uart.write("READY\n".encode())
-    
-    # Receive the image data in chunks
-    received_data = bytearray()
-    chunk_size = 1024
-    
-    while len(received_data) < size:
-        remaining = size - len(received_data)
-        chunk = uart.read(min(chunk_size, remaining))
         
+    frame_size = int.from_bytes(header, byteorder='big')
+    
+    # Read frame data
+    frame_data = bytearray()
+    while len(frame_data) < frame_size:
+        remaining = frame_size - len(frame_data)
+        chunk_size = min(1024, remaining)
+        chunk = uart.read(chunk_size)
         if not chunk:
             return None
-            
-        received_data.extend(chunk)
-        uart.write("OK\n".encode())
+        frame_data.extend(chunk)
     
-    return bytes(received_data)
-
-def display_image(image_data):
-    try:
-        # Convert received bytes to image
-        image = Image.open(io.BytesIO(image_data))
-        # Convert PIL image to OpenCV format
-        cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        
-        # Display image
-        cv2.imshow('Received Image', cv_image)
-        cv2.waitKey(1)  # Update window
-        
-        return True
-    except Exception as e:
-        print(f"Error displaying image: {e}")
-        return False
+    # Decode frame
+    frame_arr = np.frombuffer(frame_data, dtype=np.uint8)
+    frame = cv2.imdecode(frame_arr, cv2.IMREAD_COLOR)
+    return frame
 
 def main():
     uart = setup_uart_receiver()
     
     try:
-        cv2.namedWindow('Received Image', cv2.WINDOW_NORMAL)
-        
         while True:
-            print("Waiting for image...")
-            image_data = receive_image(uart)
-            
-            if image_data:
-                print(f"Received image ({len(image_data)} bytes)")
-                if display_image(image_data):
-                    print("Image displayed successfully")
-                else:
-                    print("Failed to display image")
-            else:
-                print("Failed to receive image")
-            
+            frame = receive_frame(uart)
+            if frame is not None:
+                cv2.imshow('Received Frame', frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+                    
     except KeyboardInterrupt:
         print("\nReceiving stopped by user")
-        uart.close()
         cv2.destroyAllWindows()
+        uart.close()
 
 if __name__ == '__main__':
     main()
