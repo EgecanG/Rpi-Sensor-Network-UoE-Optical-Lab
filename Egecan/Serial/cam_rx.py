@@ -4,6 +4,10 @@ import cv2
 import numpy as np
 import zlib
 
+# Must match transmitter settings
+FIXED_FRAME_SIZE = 100 * 1024  # 100KB fixed size
+CHUNK_SIZE = 256
+
 def setup_uart_receiver():
     uart = serial.Serial(
         port='/dev/ttyAMA0',
@@ -28,27 +32,26 @@ def receive_frame(uart):
         frame_size = int.from_bytes(header[:4], byteorder='big')
         expected_checksum = int.from_bytes(header[4:], byteorder='big')
         
-        print(f"Expecting frame of size: {frame_size / 1024:.2f} KB")
+        if frame_size != FIXED_FRAME_SIZE:
+            print(f"Unexpected frame size: {frame_size}, expected {FIXED_FRAME_SIZE}")
+            return None
         
-        # Read frame data in smaller chunks
+        # Read frame data in chunks
         frame_data = bytearray()
-        chunk_size = 256  # Reduced chunk size
         chunks_received = 0
-        total_chunks = frame_size // chunk_size + (1 if frame_size % chunk_size else 0)
+        total_chunks = FIXED_FRAME_SIZE // CHUNK_SIZE
         
-        while len(frame_data) < frame_size:
-            remaining = frame_size - len(frame_data)
-            current_chunk_size = min(chunk_size, remaining)
-            chunk = uart.read(current_chunk_size)
+        while len(frame_data) < FIXED_FRAME_SIZE:
+            chunk = uart.read(CHUNK_SIZE)
             
             if not chunk:
-                print(f"Failed to receive chunk. Got {len(frame_data)} of {frame_size} bytes")
+                print(f"Failed to receive chunk. Got {len(frame_data)} of {FIXED_FRAME_SIZE} bytes")
                 return None
                 
             frame_data.extend(chunk)
             chunks_received += 1
             
-            if chunks_received % 20 == 0:  # Progress update every 20 chunks
+            if chunks_received % 20 == 0:
                 print(f"Progress: {chunks_received}/{total_chunks} chunks")
         
         # Verify checksum
@@ -60,9 +63,20 @@ def receive_frame(uart):
         # Send acknowledgment
         uart.write(b'A')
         
+        # Find the end of actual JPEG data (before padding)
+        # Look for the JPEG EOF marker (0xFF 0xD9)
+        for i in range(len(frame_data)-2, 0, -1):
+            if frame_data[i] == 0xFF and frame_data[i+1] == 0xD9:
+                frame_data = frame_data[:i+2]
+                break
+        
         # Decode frame
         frame_arr = np.frombuffer(frame_data, dtype=np.uint8)
         frame = cv2.imdecode(frame_arr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            print("Failed to decode image")
+            return None
         
         receive_time = time.time() - start_time
         print(f"Frame reception took {receive_time:.2f} seconds")

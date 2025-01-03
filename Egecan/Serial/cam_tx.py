@@ -5,6 +5,10 @@ import numpy as np
 from picamera2 import Picamera2
 import zlib
 
+# Define a fixed frame size (slightly larger than typical compressed size)
+FIXED_FRAME_SIZE = 100 * 1024  # 100KB fixed size
+CHUNK_SIZE = 256
+
 def setup_uart_sender():
     uart = serial.Serial(
         port='/dev/ttyAMA0',
@@ -26,39 +30,66 @@ def setup_camera():
     time.sleep(2)
     return camera
 
+def compress_frame(frame, target_size):
+    quality = 85
+    min_quality = 5
+    max_quality = 95
+    
+    while True:
+        _, encoded_frame = cv2.imencode('.jpg', frame, [
+            cv2.IMWRITE_JPEG_QUALITY, quality,
+            cv2.IMWRITE_PNG_COMPRESSION, 0
+        ])
+        size = len(encoded_frame.tobytes())
+        
+        if size <= target_size - 1024:  # Leave some room for padding
+            # Pad the frame data to reach exact size
+            frame_data = encoded_frame.tobytes()
+            padding = bytes([0] * (target_size - len(frame_data)))
+            return frame_data + padding
+            
+        if size > target_size:
+            max_quality = quality - 1
+        else:
+            min_quality = quality + 1
+            
+        if max_quality <= min_quality:
+            # If we can't achieve target size, force it by truncation/padding
+            frame_data = encoded_frame.tobytes()[:target_size]
+            if len(frame_data) < target_size:
+                padding = bytes([0] * (target_size - len(frame_data)))
+                frame_data += padding
+            return frame_data
+            
+        quality = (min_quality + max_quality) // 2
+
 def send_frame(uart, frame):
     try:
         start_time = time.time()
         
-        _, encoded_frame = cv2.imencode('.jpg', frame, [
-            cv2.IMWRITE_JPEG_QUALITY, 85,
-            cv2.IMWRITE_PNG_COMPRESSION, 0
-        ])
-        frame_data = encoded_frame.tobytes()
-        
+        # Compress and pad frame to fixed size
+        frame_data = compress_frame(frame, FIXED_FRAME_SIZE)
         checksum = zlib.crc32(frame_data)
-        print(f"Frame size: {len(frame_data) / 1024:.2f} KB")
         
-        # Send header
-        header = len(frame_data).to_bytes(4, byteorder='big')
+        # Send header with fixed size and checksum
+        header = FIXED_FRAME_SIZE.to_bytes(4, byteorder='big')
         header += checksum.to_bytes(4, byteorder='big')
         uart.write(header)
         uart.flush()
-        time.sleep(0.005)  # Wait after header
+        time.sleep(0.005)
         
-        # Send frame data in smaller chunks
-        chunk_size = 256  # Reduced chunk size
+        # Send frame data in chunks
         chunks_sent = 0
-        total_chunks = len(frame_data) // chunk_size + (1 if len(frame_data) % chunk_size else 0)
+        total_chunks = FIXED_FRAME_SIZE // CHUNK_SIZE
         
-        for i in range(0, len(frame_data), chunk_size):
-            chunk = frame_data[i:i + chunk_size]
+        for i in range(0, FIXED_FRAME_SIZE, CHUNK_SIZE):
+            chunk = frame_data[i:i + CHUNK_SIZE]
             uart.write(chunk)
             uart.flush()
             chunks_sent += 1
-            if chunks_sent % 20 == 0:  # Progress update every 20 chunks
+            if chunks_sent % 20 == 0:
                 print(f"Progress: {chunks_sent}/{total_chunks} chunks")
-            time.sleep(0.003)  # Increased delay between chunks
+            time.sleep(0.003)
             
         # Wait for acknowledgment
         ack = uart.read(1)
@@ -85,7 +116,6 @@ def main():
             frame_count += 1
             print(f"Sent frame {frame_count}")
             
-            # Wait for next second
             elapsed = time.time() - start_time
             sleep_time = max(0, 1.0 - elapsed)
             if sleep_time > 0:
