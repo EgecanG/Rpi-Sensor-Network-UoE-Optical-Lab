@@ -15,7 +15,7 @@ def setup_uart_sender():
 
 def send_message(uart):
     # Create test message - "Hello" repeated 200 times
-    test_message = "Hello Tes" * 400000 + "\n"
+    test_message = "Hello Tes" * 40000 + "\n"
     counter = 0
     
     try:
