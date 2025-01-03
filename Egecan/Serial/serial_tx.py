@@ -29,7 +29,7 @@ def send_message(uart):
                 print(f"Received: {response}")
             
             counter += 1
-            time.sleep(0.1)  # Wait 1 second between messages
+            time.sleep(0.001)  # Wait 1 second between messages
             
     except KeyboardInterrupt:
         print("\nSending stopped by user")
