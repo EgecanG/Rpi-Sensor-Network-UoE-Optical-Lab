@@ -30,7 +30,7 @@ def send_message(uart):
                 print(f"Received: {response}")
             
             counter += 1
-            time.sleep(0.001)
+            time.sleep(0.0025)
             
     except KeyboardInterrupt:
         print("\nSending stopped by user")

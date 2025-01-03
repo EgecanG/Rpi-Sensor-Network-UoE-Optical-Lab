@@ -16,36 +16,40 @@ def setup_uart_receiver():
 
 def receive_message(uart):
     counter = 0
-    error_count = 0
-    expected_size = 5120 # 5KB
+    total_bytes_sent = 0
+    total_byte_errors = 0
+    expected_size = 5120  # 5KB
+    expected_pattern = "ABCDEFGHIJ"
+    
     try:
         while True:
             if uart.in_waiting > 0:
                 message = uart.read(expected_size).decode()
                 received_size = len(message.encode())
+                total_bytes_sent += received_size
                 
-                # Verify the pattern
-                is_valid = all(message[i:i+10] == "ABCDEFGHIJ" for i in range(0, len(message), 10))
-                if not is_valid:
-                    error_count += 1
+                # Count byte errors by comparing each character
+                byte_errors = sum(1 for i in range(len(message)) 
+                                if message[i] != expected_pattern[i % 10])
+                total_byte_errors += byte_errors
                 
-                print(f"Received message {counter}")
-                print(f"Size: {received_size} bytes")
-                print(f"Valid: {'OK' if is_valid else 'ERROR'}")
-                print(f"Total errors so far: {error_count}")
-                print(f"Error rate: {(error_count/(counter+1)*100):.2f}%\n")
+                print(f"Message {counter}:")
+                print(f"Bytes with errors in this message: {byte_errors}/{received_size}")
+                print(f"Total bytes with errors: {total_byte_errors}/{total_bytes_sent}")
+                print(f"Bit error rate: {(total_byte_errors/total_bytes_sent*100):.6f}%\n")
                 
                 # Send response
-                response = f"Message {counter} received, size: {received_size}, valid: {is_valid}, total errors: {error_count}\n"
+                response = f"Message {counter}, byte errors: {byte_errors}/{received_size}\n"
                 uart.write(response.encode())
                 counter += 1
                 
     except KeyboardInterrupt:
         print("\nReceiving stopped by user")
         print(f"\nFinal Statistics:")
-        print(f"Total messages received: {counter}")
-        print(f"Total errors: {error_count}")
-        print(f"Final error rate: {(error_count/counter*100):.2f}%")
+        print(f"Total messages: {counter}")
+        print(f"Total bytes transmitted: {total_bytes_sent}")
+        print(f"Total bytes with errors: {total_byte_errors}")
+        print(f"Final bit error rate: {(total_byte_errors/total_bytes_sent*100):.6f}%")
         uart.close()
 
 if __name__ == '__main__':
