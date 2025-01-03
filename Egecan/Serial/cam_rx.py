@@ -2,7 +2,7 @@ import serial
 import time
 import cv2
 import numpy as np
-import zlib  # For checksum verification
+import zlib
 
 def setup_uart_receiver():
     uart = serial.Serial(
@@ -11,12 +11,14 @@ def setup_uart_receiver():
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
-        timeout=1
+        timeout=2  # Increased timeout for larger frames
     )
     return uart
 
 def receive_frame(uart):
     try:
+        start_time = time.time()
+        
         # Read header (8 bytes: 4 for size + 4 for checksum)
         header = uart.read(8)
         if not header or len(header) < 8:
@@ -26,17 +28,23 @@ def receive_frame(uart):
         frame_size = int.from_bytes(header[:4], byteorder='big')
         expected_checksum = int.from_bytes(header[4:], byteorder='big')
         
-        # Read frame data
+        print(f"Expecting frame of size: {frame_size / 1024:.2f} KB")
+        
+        # Read frame data with larger buffer
         frame_data = bytearray()
+        chunk_size = 4096  # Increased chunk size
+        
         while len(frame_data) < frame_size:
             remaining = frame_size - len(frame_data)
-            chunk_size = min(1024, remaining)
-            chunk = uart.read(chunk_size)
+            current_chunk_size = min(chunk_size, remaining)
+            chunk = uart.read(current_chunk_size)
+            
             if not chunk:
-                print("Failed to receive complete frame")
+                print(f"Failed to receive complete frame. Got {len(frame_data)} of {frame_size} bytes")
                 return None
+                
             frame_data.extend(chunk)
-        
+            
         # Verify checksum
         actual_checksum = zlib.crc32(frame_data)
         if actual_checksum != expected_checksum:
@@ -49,6 +57,9 @@ def receive_frame(uart):
         # Decode frame
         frame_arr = np.frombuffer(frame_data, dtype=np.uint8)
         frame = cv2.imdecode(frame_arr, cv2.IMREAD_COLOR)
+        
+        receive_time = time.time() - start_time
+        print(f"Frame reception took {receive_time:.2f} seconds")
         
         return frame
         
