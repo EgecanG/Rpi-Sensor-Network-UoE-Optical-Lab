@@ -15,26 +15,38 @@ def setup_uart_receiver():
     return uart
 
 def receive_message(uart):
+    def receive_message(uart):
     counter = 0
-    expected_size = 5120  # 5KB
+    error_count = 0
+    expected_size = 2560  # 5KB
     try:
         while True:
             if uart.in_waiting > 0:
                 message = uart.read(expected_size).decode()
                 received_size = len(message.encode())
-                print(f"Received message {counter} of size: {received_size} bytes")
                 
                 # Verify the pattern
                 is_valid = all(message[i:i+10] == "ABCDEFGHIJ" for i in range(0, len(message), 10))
-                print(f"Message integrity: {'OK' if is_valid else 'ERROR'}")
+                if not is_valid:
+                    error_count += 1
+                
+                print(f"Received message {counter}")
+                print(f"Size: {received_size} bytes")
+                print(f"Valid: {'OK' if is_valid else 'ERROR'}")
+                print(f"Total errors so far: {error_count}")
+                print(f"Error rate: {(error_count/(counter+1)*100):.2f}%\n")
                 
                 # Send response
-                response = f"Message {counter} received, size: {received_size}, valid: {is_valid}\n"
+                response = f"Message {counter} received, size: {received_size}, valid: {is_valid}, total errors: {error_count}\n"
                 uart.write(response.encode())
                 counter += 1
                 
     except KeyboardInterrupt:
         print("\nReceiving stopped by user")
+        print(f"\nFinal Statistics:")
+        print(f"Total messages received: {counter}")
+        print(f"Total errors: {error_count}")
+        print(f"Final error rate: {(error_count/counter*100):.2f}%")
         uart.close()
 
 if __name__ == '__main__':
