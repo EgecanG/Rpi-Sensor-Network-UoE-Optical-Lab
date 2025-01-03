@@ -3,10 +3,9 @@ import serial
 import time
 
 def setup_uart_sender():
-    # Configure serial port
     uart = serial.Serial(
-        port='/dev/ttyAMA0',  # Serial port name: Can also use Serial0 which is connected to ttyAMA0
-        baudrate=10000000,      # Must match on both devices
+        port='/dev/ttyAMA0',
+        baudrate=10000000,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
@@ -15,22 +14,21 @@ def setup_uart_sender():
     return uart
 
 def send_message(uart):
-    # Create exactly 5KB test string
-    pattern = "ABCDEFGHIJ"
-    test_string = pattern * 100  # 512 * 10 = 5120 bytes (5KB)
-    
+    # Create test message - "Hello" repeated 200 times
+    test_message = "Hello" * 200 + "\n"
     counter = 0
+    
     try:
         while True:
-            uart.write(test_string.encode())
-            print(f"Sent message {counter} of size: {len(test_string.encode())} bytes")
+            uart.write(test_message.encode())
+            print(f"Sent message {counter}, size: {len(test_message)} bytes")
             
             response = uart.readline().decode().strip()
             if response:
                 print(f"Received: {response}")
             
             counter += 1
-            time.sleep(0.0025)
+            time.sleep(0.001)
             
     except KeyboardInterrupt:
         print("\nSending stopped by user")

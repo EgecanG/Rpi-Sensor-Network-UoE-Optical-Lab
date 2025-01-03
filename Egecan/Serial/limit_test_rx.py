@@ -3,10 +3,9 @@ import serial
 import time
 
 def setup_uart_receiver():
-    # Configure serial port
     uart = serial.Serial(
-        port='/dev/ttyAMA0',  # Serial port name: Can also use Serial0 which is connected to ttyAMA0
-        baudrate=10000000,      # Must match on both devices
+        port='/dev/ttyAMA0',
+        baudrate=10000000,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         bytesize=serial.EIGHTBITS,
@@ -15,41 +14,36 @@ def setup_uart_receiver():
     return uart
 
 def receive_message(uart):
+    expected_message = "Hello" * 200 + "\n"
     counter = 0
-    total_bytes_sent = 0
-    total_byte_errors = 0
-    expected_size = 1000  # 5KB
-    expected_pattern = "ABCDEFGHIJ"
+    error_count = 0
     
     try:
         while True:
             if uart.in_waiting > 0:
-                message = uart.read(expected_size).decode()
-                received_size = len(message.encode())
-                total_bytes_sent += received_size
+                received = uart.readline().decode()
                 
-                # Count byte errors by comparing each character
-                byte_errors = sum(1 for i in range(len(message)) 
-                                if message[i] != expected_pattern[i % 10])
-                total_byte_errors += byte_errors
+                # Verify if message is correct
+                is_correct = (received == expected_message)
+                if not is_correct:
+                    error_count += 1
                 
-                print(f"Message {counter}:")
-                print(f"Bytes with errors in this message: {byte_errors}/{received_size}")
-                print(f"Total bytes with errors: {total_byte_errors}/{total_bytes_sent}")
-                print(f"Bit error rate: {(total_byte_errors/total_bytes_sent*100):.6f}%\n")
+                print(f"\nMessage {counter}:")
+                print(f"Correct: {'Yes' if is_correct else 'No'}")
+                print(f"Total errors so far: {error_count}/{counter + 1}")
+                print(f"Error rate: {(error_count/(counter + 1)*100):.2f}%")
                 
                 # Send response
-                response = f"Message {counter}, byte errors: {byte_errors}/{received_size}\n"
+                response = f"Message {counter}: {'OK' if is_correct else 'ERROR'}, Total errors: {error_count}\n"
                 uart.write(response.encode())
                 counter += 1
                 
     except KeyboardInterrupt:
         print("\nReceiving stopped by user")
         print(f"\nFinal Statistics:")
-        print(f"Total messages: {counter}")
-        print(f"Total bytes transmitted: {total_bytes_sent}")
-        print(f"Total bytes with errors: {total_byte_errors}")
-        print(f"Final bit error rate: {(total_byte_errors/total_bytes_sent*100):.6f}%")
+        print(f"Total messages received: {counter}")
+        print(f"Total errors: {error_count}")
+        print(f"Final error rate: {(error_count/counter*100):.2f}%")
         uart.close()
 
 if __name__ == '__main__':
