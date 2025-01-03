@@ -17,7 +17,7 @@ def setup_uart_receiver():
 def receive_message(uart):
     counter = 0
     error_count = 0
-    expected_size = 2560  # 5KB
+    expected_size = 5120 # 5KB
     try:
         while True:
             if uart.in_waiting > 0:
