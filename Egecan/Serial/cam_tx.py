@@ -2,7 +2,7 @@ import serial
 import time
 import cv2
 import numpy as np
-import pickle
+from picamera2 import Picamera2
 
 def setup_uart_sender():
     uart = serial.Serial(
@@ -16,14 +16,22 @@ def setup_uart_sender():
     return uart
 
 def setup_camera():
-    camera = cv2.VideoCapture(0)
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    camera = Picamera2()
+    # Configure camera for 640x480 resolution
+    config = camera.create_still_configuration(
+        main={"size": (640, 480)},
+        raw={"size": camera.sensor_resolution}
+    )
+    camera.configure(config)
+    camera.start()
     return camera
 
 def send_frame(uart, frame):
+    # Convert frame from BGR to RGB (picamera2 captures in RGB format)
+    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    
     # Compress frame to reduce size
-    _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+    _, encoded_frame = cv2.imencode('.jpg', frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 50])
     frame_data = encoded_frame.tobytes()
     
     # Add header with frame size
@@ -45,14 +53,14 @@ def main():
     
     try:
         while True:
-            ret, frame = camera.read()
-            if ret:
-                send_frame(uart, frame)
-                time.sleep(0.1)  # Adjust frame rate as needed
+            # Capture frame using picamera2
+            frame = camera.capture_array()
+            send_frame(uart, frame)
+            time.sleep(0.1)  # Adjust frame rate as needed
                 
     except KeyboardInterrupt:
         print("\nSending stopped by user")
-        camera.release()
+        camera.stop()
         uart.close()
 
 if __name__ == '__main__':
