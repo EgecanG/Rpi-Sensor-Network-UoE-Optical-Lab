@@ -15,7 +15,6 @@ def setup_uart_receiver():
     return uart
 
 def receive_message(uart):
-    def receive_message(uart):
     counter = 0
     error_count = 0
     expected_size = 2560  # 5KB
